@@ -40,6 +40,7 @@ RUN python -m pip install --upgrade pip \
 
 COPY backend/app ./app
 COPY backend/scripts ./scripts
+COPY backend/evals ./evals
 COPY backend/alembic.ini ./alembic.ini
 COPY backend/migrations ./migrations
 

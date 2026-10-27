@@ -23,7 +23,8 @@ REPO = Path("/opt/LimitUpLab")
 STATE = Path("/var/lib/limituplab-deploy")
 LOCK = Path("/var/lock/limituplab-release.lock")
 MAINTENANCE = REPO / ".maintenance"
-SERVICES = ("backend", "frontend", "recommendation-refresh", "daily-update")
+WORKER_SERVICES = ("recommendation-refresh", "memory-extraction", "memory-embeddings")
+SERVICES = ("backend", "frontend", *WORKER_SERVICES, "daily-update")
 
 
 def database_mode() -> str:
@@ -301,27 +302,30 @@ class Deployment:
         for service in ("backend", "frontend"):
             self.run("docker", "tag", release[service], f"limituplab-{service}:local")
 
-    # Start the release's background worker after the foreground service transition.
-    def start_worker(self, release: dict) -> None:
-        self.compose(release, "up", "-d", "--no-build", "recommendation-refresh")
-        # Check it remains alive, rather than only checking a successful docker start.
+    # Start the release's background workers after the foreground service transition.
+    def start_workers(self, release: dict) -> None:
+        self.compose(release, "up", "-d", "--no-build", *WORKER_SERVICES)
+        # Check they remain alive, rather than only checking a successful docker start.
         time.sleep(10)
-        state = json.loads(self.run("docker", "inspect", "limituplab-recommendation-refresh-1",
-                                   "--format", "{{json .State}}", capture=True))
-        if not state["Running"] or state["Restarting"]:
-            raise RuntimeError("Recommendation refresh worker is not stable")
+        for service in WORKER_SERVICES:
+            state = json.loads(self.run(
+                "docker", "inspect", f"limituplab-{service}-1",
+                "--format", "{{json .State}}", capture=True,
+            ))
+            if not state["Running"] or state["Restarting"]:
+                raise RuntimeError(f"{service} worker is not stable")
 
     # Attempt release recovery using the recorded previous state, retaining maintenance protection
     # when rollback is unsafe.
     def recover(self, target: dict) -> None:
-        self.compose(target, "stop", "-t", "60", "recommendation-refresh", "backend", "frontend")
+        self.compose(target, "stop", "-t", "60", *WORKER_SERVICES, "backend", "frontend")
         if self.promoted or self.previous_schema is None or self.schema() != self.previous_schema:
             self.status("manual_recovery_required", reason="Release metadata advanced or database schema changed/unverified")
             return
         self.restore_local_tags(self.previous)
         self.compose(self.previous, "up", "-d", "--no-build", "--wait", "--wait-timeout", "180", "backend", "frontend")
         self.probe()
-        self.start_worker(self.previous)
+        self.start_workers(self.previous)
         MAINTENANCE.unlink()
         self.maintenance = False
         self.status("rolled_back")
@@ -338,14 +342,14 @@ class Deployment:
         self.maintenance = True
         self.status("maintenance")
         try:
-            self.compose(self.previous, "stop", "-t", "60", "recommendation-refresh", "frontend", "backend")
+            self.compose(self.previous, "stop", "-t", "60", *WORKER_SERVICES, "frontend", "backend")
             self.previous_schema = self.schema()
             self.backup()
             check_window()
             self.status("switching")
             self.compose(target, "up", "-d", "--no-build", "--wait", "--wait-timeout", "180", "backend", "frontend")
             self.probe()
-            self.start_worker(target)
+            self.start_workers(target)
             self.restore_local_tags(target)
             self.git("merge", "--ff-only", self.sha)
             self.promoted = True

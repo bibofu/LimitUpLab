@@ -107,8 +107,10 @@ Do not blindly acknowledge an unexpected table without checking its role.
 
 ```sh
 docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml up -d backend frontend
-docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml up -d recommendation-refresh
+docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml up -d recommendation-refresh memory-extraction memory-embeddings
 ```
+
+`memory-extraction` 和 `memory-embeddings` 分别处理自动学习候选与向量回填，均通过 PostgreSQL 租约防止重复启动。`limituplab-data` 卷同时保存 embedding 模型缓存；不要为 worker 单独创建未挂载的缓存目录，否则容器重建后会重新下载模型。`deploy/release.py` 会把 `recommendation-refresh`、`memory-extraction`、`memory-embeddings` 一起纳入镜像 pin、停止/启动和 10 秒稳定性检查；任一 worker 启动后退出会触发回滚。
 
 Install the reviewed `deploy/release.py` and `deploy/job.py` before changing the
 production database mode. These root-owned helpers are not automatically replaced

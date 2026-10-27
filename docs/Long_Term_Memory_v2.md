@@ -70,6 +70,8 @@
   - 使用 PostgreSQL 租约 `job:memory-embeddings` 防止重复 worker，TTL 300 秒并心跳续约；
   - 保存向量只增加 `management_revision`，不改变内容 `revision`、owner revision 或 fingerprint；
   - `scripts/start_dev_detached.py` 在 embedding 启用且无 live lease 时自动拉起该 worker；
+  - Docker Compose 提供 `memory-extraction` 和 `memory-embeddings` 两个常驻服务，复用后端镜像和 `limituplab-data` 卷；embedding 缓存固定为 `/app/data/memory_embeddings`；
+  - `deploy/release.py` 将两个 worker 纳入镜像 pin、停止/启动和稳定性检查；任一 worker 启动后退出会触发回滚；
   - 本地 PostgreSQL 测试库需要允许临时 schema 看到 `public.vector`，测试 schema 的 `search_path` 为 `<schema>,public`。
 - 自由文本偏好：
   - `preference` / `research_context` 支持 `preference:`、`tool_display:`、`research:` 前缀；
@@ -201,7 +203,8 @@
   - 真实 Agent 验证（2026-10-28）：在 Docker pgvector 业务库和 embedding worker 运行时，“2026-10-27 的涨停池有哪些股票？”“贵州茅台的主营业务是什么？”“2026-10-27 的龙虎榜有哪些股票？”均 `complete`，且 `memory_context_used=true`；“贵州茅台最近K线走势怎么样？”仍为 `partial`，原因是 `stock_kline` 数据源部分字段缺失，不是记忆或向量检索链路问题。
   - 自动写入与跨会话召回验收（2026-10-28）：新 owner 显式保存 `tool_display:dragon_tiger_list` 后，embedding worker 回填向量；新会话“展示最新的龙虎榜”返回单列 `name` 展示块、`row_count=87`，`memory_context_used=true`，同 owner 的“贵州茅台主营业务”没有龙虎榜展示块，说明 tool scope 未泄漏。
   - 语义召回验收（2026-10-28）：同一 owner 保存 topic-scoped 研究记忆“研究首板接力时关注二板晋级率和炸板率”；新会话用无直接词法重叠的“打板后第二天还能不能继续走强看什么”提问，Agent 返回 `complete`，该记忆 `use_count=1`、`last_used_at` 更新，证明 BGE 语义召回在真实 Graph 中生效，而不是只在离线评测中生效。
-  - 回归验收（2026-10-28）：使用 Docker `limituplab_test` 数据库运行完整后端测试，`2046 passed, 1 skipped, 22 subtests passed`；前端 243 项测试通过，生产构建通过。
+  - Compose 演练验收（2026-10-28）：用临时 `.env.production` 和隔离的 `limituplab-drill-*` 卷启动 pgvector 栈，`postgres-migrate` 成功到 `0015_memory_embeddings`，backend、`memory-extraction`、`memory-embeddings` 均运行；写入一条 active 记忆后向量由 worker 回填，两个 worker 的 PostgreSQL 租约同时存活。演练未挂载现有业务卷，结束后删除临时卷和配置。
+  - 回归验收（2026-10-28）：使用 Docker `limituplab_test` 数据库运行完整后端测试，`2049 passed, 1 skipped, 22 subtests passed`；前端 243 项测试通过，生产构建通过。
   - 检索评测验收（2026-10-28）：25 个固定查询上，词法基线 exact `20/25`、recall `0.783`；校准后混合检索 exact `22/25`、recall `0.913`，误注入从 `0/23` 增至 `1/23`，平均 token 从 621 增至 722；阈值由 0.25 提升到 0.50，向量权重由 12 降到 6。
 
 ## 尚未落地

@@ -57,6 +57,18 @@ services:
     depends_on:
       <<: *postgres-dependencies
 
+  memory-extraction:
+    environment:
+      <<: *postgres-environment
+    depends_on:
+      <<: *postgres-dependencies
+
+  memory-embeddings:
+    environment:
+      <<: *postgres-environment
+    depends_on:
+      <<: *postgres-dependencies
+
   daily-update:
     environment:
       <<: *postgres-environment

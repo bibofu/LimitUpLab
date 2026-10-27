@@ -66,7 +66,7 @@ curl --fail http://127.0.0.1:8080/health
 
 ```bash
 docker compose --env-file .env.production --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml build
-docker compose --env-file .env.production --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml up -d backend frontend recommendation-refresh
+docker compose --env-file .env.production --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml up -d backend frontend recommendation-refresh memory-extraction memory-embeddings
 docker compose --env-file .env.production --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml ps
 curl --fail http://127.0.0.1:8080/health
 ```

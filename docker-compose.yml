@@ -15,6 +15,7 @@ services:
     environment:
       LIMITUPLAB_DATABASE_URL: ${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}
       LIMITUPLAB_DATA_DIRECTORY: /app/data
+      LIMITUPLAB_MEMORY_EMBEDDING_CACHE: /app/data/memory_embeddings
       TZ: Asia/Shanghai
     volumes:
       - limituplab-data:/app/data
@@ -75,6 +76,49 @@ services:
       - /tmp/recommendation_refresh.lock
       - --report-path
       - /app/data/recommendation_refresh_latest.json
+
+  memory-extraction:
+    image: limituplab-backend:${LIMITUPLAB_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        INSTALL_HITHINK_FINANCE: ${INSTALL_HITHINK_FINANCE:-true}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.production
+    environment:
+      LIMITUPLAB_DATABASE_URL: ${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}
+      LIMITUPLAB_DATA_DIRECTORY: /app/data
+      TZ: Asia/Shanghai
+    volumes:
+      - limituplab-data:/app/data
+    healthcheck:
+      disable: true
+    command: ["python", "scripts/run_memory_extraction.py"]
+
+  memory-embeddings:
+    image: limituplab-backend:${LIMITUPLAB_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        INSTALL_HITHINK_FINANCE: ${INSTALL_HITHINK_FINANCE:-true}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.production
+    environment:
+      LIMITUPLAB_DATABASE_URL: ${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}
+      LIMITUPLAB_DATA_DIRECTORY: /app/data
+      LIMITUPLAB_MEMORY_EMBEDDING_CACHE: /app/data/memory_embeddings
+      TZ: Asia/Shanghai
+    volumes:
+      - limituplab-data:/app/data
+    healthcheck:
+      disable: true
+    command: ["python", "scripts/run_memory_embeddings.py"]
 
   daily-update:
     image: limituplab-backend:${LIMITUPLAB_IMAGE_TAG:-local}

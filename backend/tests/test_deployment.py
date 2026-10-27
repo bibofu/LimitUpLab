@@ -54,7 +54,7 @@ def deployment(tmp_path, monkeypatch):
     item = release.Deployment("v1.3.1", "a" * 40)
     item.previous = {"sha": "b" * 40, "path": "old", "backend": "old-back", "frontend": "old-front"}
     item.prepare = Mock(return_value={"sha": "a" * 40, "path": "new", "backend": "new-back", "frontend": "new-front"})
-    for name in ("wait_for_jobs", "compose", "backup", "probe", "start_worker", "restore_local_tags", "git"):
+    for name in ("wait_for_jobs", "compose", "backup", "probe", "start_workers", "restore_local_tags", "git"):
         setattr(item, name, Mock())
     item.schema = Mock(return_value={"version": 12, "hash": "unchanged"})
     return item
@@ -98,7 +98,7 @@ def test_schema_migration_failure_requires_operator_recovery(deployment):
     assert deployment.record["status"] == "manual_recovery_required"
     assert release.MAINTENANCE.exists()
     deployment.restore_local_tags.assert_not_called()
-    deployment.start_worker.assert_not_called()
+    deployment.start_workers.assert_not_called()
 
 
 # Regression scenario: success records exact release and reopens site.
@@ -191,10 +191,57 @@ def test_postgresql_overlay_keeps_sqlite_volume_and_waits_for_schema():
     assert postgres["volumes"] == ["limituplab-postgres:/var/lib/postgresql"]
     assert "ports" not in postgres
     assert "limituplab-data:/app/data" in base["services"]["backend"]["volumes"]
-    for name in ("backend", "recommendation-refresh", "daily-update"):
+    assert base["services"]["backend"]["environment"]["LIMITUPLAB_MEMORY_EMBEDDING_CACHE"] == "/app/data/memory_embeddings"
+    for name in ("backend", "recommendation-refresh", "memory-extraction", "memory-embeddings", "daily-update"):
         dependency = overlay["services"][name]["depends_on"]
         assert dependency["postgres"]["condition"] == "service_healthy"
         assert dependency["postgres-migrate"]["condition"] == "service_completed_successfully"
+
+
+def test_memory_workers_share_backend_image_and_persist_model_cache():
+    base = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    for service, script in (
+        ("memory-extraction", "scripts/run_memory_extraction.py"),
+        ("memory-embeddings", "scripts/run_memory_embeddings.py"),
+    ):
+        definition = base["services"][service]
+        assert definition["image"] == "limituplab-backend:${LIMITUPLAB_IMAGE_TAG:-local}"
+        assert definition["command"] == ["python", script]
+        assert "ports" not in definition
+        assert definition["volumes"] == ["limituplab-data:/app/data"]
+        assert definition["restart"] == "unless-stopped"
+    embeddings = base["services"]["memory-embeddings"]
+    assert embeddings["environment"]["LIMITUPLAB_MEMORY_EMBEDDING_CACHE"] == "/app/data/memory_embeddings"
+
+
+def test_release_starts_and_inspects_every_background_worker(postgres_release, monkeypatch):
+    item = postgres_release
+    item.compose = Mock()
+    item.run = Mock(return_value=json.dumps({"Running": True, "Restarting": False}))
+    monkeypatch.setattr(release.time, "sleep", lambda _: None)
+    item.start_workers(item.previous)
+    item.compose.assert_called_once_with(
+        item.previous, "up", "-d", "--no-build",
+        "recommendation-refresh", "memory-extraction", "memory-embeddings",
+    )
+    inspected = [call.args[2] for call in item.run.call_args_list]
+    assert inspected == [
+        "limituplab-recommendation-refresh-1",
+        "limituplab-memory-extraction-1",
+        "limituplab-memory-embeddings-1",
+    ]
+
+
+def test_release_rejects_an_unstable_background_worker(postgres_release, monkeypatch):
+    item = postgres_release
+    item.compose = Mock()
+    item.run = Mock(side_effect=[
+        json.dumps({"Running": True, "Restarting": False}),
+        json.dumps({"Running": False, "Restarting": True}),
+    ])
+    monkeypatch.setattr(release.time, "sleep", lambda _: None)
+    with pytest.raises(RuntimeError, match="memory-extraction worker is not stable"):
+        item.start_workers(item.previous)
 
 
 def test_removed_sqlite_deployment_mode_is_rejected(tmp_path):
@@ -327,6 +374,8 @@ def test_postgres_compose_pins_migration_image_and_explicit_configuration(postgr
     assert str(release.REPO / "docker-compose.postgresql.yml") in args
     override = json.loads((release.STATE / "releases" / ("b" * 40 + "-images.json")).read_text())
     assert override["services"]["postgres-migrate"]["image"] == "old-back"
+    assert override["services"]["memory-extraction"]["image"] == "old-back"
+    assert override["services"]["memory-embeddings"]["image"] == "old-back"
     assert item.run.call_args.kwargs["capture"] is True
 
 
