@@ -397,7 +397,7 @@ def candidate_write(candidate: MemoryCandidateDraft, *, message: str, run_id: st
 
 
 class MemoryExtractionWorker:
-    """Claim and process extraction jobs; never activates a candidate."""
+    """Claim extraction jobs; candidates stay inactive unless safe_auto approves."""
 
     def __init__(
         self,
@@ -471,6 +471,7 @@ class MemoryExtractionWorker:
         created, skipped = [], 0
         decisions = {"add": 0, "update": 0, "delete": 0, "refresh": 0, "noop": 0, "replay": 0}
         auto_activated, auto_shadow, auto_errors = [], [], []
+        auto_decisions = []
         auto_held = 0
         for index, candidate in enumerate(candidates):
             if (candidate.confidence < MIN_CANDIDATE_CONFIDENCE
@@ -507,6 +508,7 @@ class MemoryExtractionWorker:
                         }
                         if mode == "safe_auto_shadow":
                             auto_shadow.append(audit)
+                            auto_decisions.append({**audit, "outcome": "shadow"})
                         else:
                             try:
                                 repository.confirm_candidate(
@@ -516,14 +518,26 @@ class MemoryExtractionWorker:
                                     activation_reason=evaluation.activation_reason,
                                 )
                                 auto_activated.append(audit)
+                                auto_decisions.append({**audit, "outcome": "activated"})
                                 if result["candidate_id"] in created:
                                     created.remove(result["candidate_id"])
                             except (MemoryConflict, MemoryNotFound, ValueError) as error:
                                 auto_errors.append({
                                     **audit, "error": type(error).__name__,
                                 })
+                                auto_decisions.append({
+                                    **audit, "outcome": "error",
+                                    "error": type(error).__name__,
+                                })
                     else:
                         auto_held += 1
+                        auto_decisions.append({
+                            "candidate_id": result["candidate_id"],
+                            "eligible": False,
+                            "reasons": list(evaluation.reasons),
+                            "risk": evaluation.risk,
+                            "outcome": "held",
+                        })
             except (MemoryConflict, MemoryNotFound, ValueError):
                 skipped += 1
         self._finish(job, "succeeded", {
@@ -534,6 +548,7 @@ class MemoryExtractionWorker:
             "auto_shadow_eligible_ids": [item["candidate_id"] for item in auto_shadow],
             "auto_held_count": auto_held,
             "auto_errors": auto_errors,
+            "auto_decisions": auto_decisions,
             "auto_policy_version": "safe-auto-v1",
         })
 

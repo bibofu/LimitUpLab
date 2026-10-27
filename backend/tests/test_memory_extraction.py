@@ -535,6 +535,8 @@ def test_worker_safe_auto_holds_delete_and_other_review_candidates(
         ).fetchone()["result_json"])
     assert result["auto_activated_ids"] == []
     assert result["auto_held_count"] == 1
+    assert result["auto_decisions"][0]["outcome"] == "held"
+    assert "not_an_upsert" in result["auto_decisions"][0]["reasons"]
 
 
 def test_worker_normalizes_tool_id_and_skips_low_confidence_candidates(postgresql_database, monkeypatch):

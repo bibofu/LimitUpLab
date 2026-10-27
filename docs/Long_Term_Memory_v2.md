@@ -103,6 +103,9 @@
     - UPDATE / DELETE / 自由文本 / 未知列 / 无目标冲突候选不自动激活；
   - 激活来源写入 `activation_kind=manual|safe_auto` 和 `activation_reason`；
   - `safe_auto_shadow` 只记录本可自动激活的候选，不写 active，用于校准；
+  - worker 的 `result_json.auto_decisions` 记录每个候选的 outcome、policy reasons 和 risk，不保存记忆正文；
+  - 影子/自动决策汇总：`python backend/scripts/report_memory_auto.py --days 7`；
+  - 安全自动激活边界由 `tests/test_memory_auto_golden.py` 的固定用例覆盖；
   - worker 命令：`python backend/scripts/run_memory_extraction.py --once`，或在本地启动脚本中自动拉起；
   - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate|safe_auto_shadow|safe_auto`；默认 `safe_auto`。
 - 写入与删除：
