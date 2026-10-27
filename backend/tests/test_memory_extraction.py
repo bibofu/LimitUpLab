@@ -68,18 +68,89 @@ def test_tool_display_canonical_key_uses_the_public_tool_identity():
     assert item.canonical_key == "tool_display:dragon_tiger_list"
 
 
-def seed_job(owner=None):
+def test_model_typed_hints_are_normalized_to_closed_settings():
+    style = MemoryCandidateDraft.model_validate({
+        **draft(),
+        "canonical_key": None,
+        "content_text": "用户偏好简洁的回答",
+        "scope_type": "global",
+        "scope": {},
+        "structured": {"style": "concise"},
+        "source_quote": "以后回答简洁一点",
+    })
+    assert (style.memory_type, style.canonical_key, style.content_text) == (
+        "preference", "response_style", "concise",
+    )
+    assert style.structured == {}
+
+    output = MemoryCandidateDraft.model_validate({
+        **draft(),
+        "canonical_key": "display.default_format",
+        "content_text": "用户希望默认用表格",
+        "scope_type": "global",
+        "scope": {},
+        "structured": {"display_format": "table"},
+        "source_quote": "以后默认用表格",
+    })
+    assert (output.memory_type, output.canonical_key, output.content_text) == (
+        "preference", "output_format", "table",
+    )
+
+    topic = MemoryCandidateDraft.model_validate({
+        **draft(),
+        "memory_type": "preference",
+        "canonical_key": "topic_filter_first_limit_up",
+        "content_text": "只看首板",
+        "scope_type": "topic",
+        "scope": {"topic": "首板"},
+        "structured": {"filter": "首板"},
+        "source_quote": "以后研究主题只看首板",
+    })
+    assert (topic.memory_type, topic.canonical_key, topic.content_text) == (
+        "research_context", "research_topic", "首板",
+    )
+    assert (topic.scope_type, topic.scope, topic.structured) == ("global", {}, {})
+
+    dotted = MemoryCandidateDraft.model_validate({
+        **draft(),
+        "canonical_key": "preference.response_style",
+        "content_text": "concise",
+        "scope_type": "global",
+        "scope": {},
+        "structured": {},
+        "source_quote": "以后回答简洁一点",
+    })
+    assert (dotted.memory_type, dotted.canonical_key, dotted.content_text) == (
+        "preference", "response_style", "concise",
+    )
+
+    scoped_topic = MemoryCandidateDraft.model_validate({
+        **draft(),
+        "memory_type": "research_context",
+        "canonical_key": None,
+        "content_text": "只看首板",
+        "scope_type": "tool",
+        "scope": {"tool_name": "stock_financials"},
+        "structured": {"filter": "首板"},
+        "source_quote": "以后分析财报时研究主题只看首板",
+    })
+    assert (scoped_topic.canonical_key, scoped_topic.scope_type) == (
+        "research_topic", "tool",
+    )
+
+
+def seed_job(owner=None, message=MESSAGE):
     user = owner or "visitor_" + uuid4().hex
     session = "memory-extract-" + uuid4().hex
     chats = ChatSessionRepository()
     chats.ensure_session(session, owner_id=user)
     lifecycle = RunLifecycle()
     row, _ = lifecycle.create(AgentChatRequest(
-        session_id=session, message_id="m1", message=MESSAGE,
+        session_id=session, message_id="m1", message=message,
     ), user)
     chats.append_message(ChatSessionMessage(
         message_id="user_" + row["run_id"], session_id=session, role="user",
-        content=MESSAGE, run_id=row["run_id"], created_at=row["started_at"],
+        content=message, run_id=row["run_id"], created_at=row["started_at"],
     ), owner_id=user)
     with closing(connect()) as db:
         begin_write(db)
@@ -283,6 +354,52 @@ def test_worker_safe_auto_activates_only_the_low_risk_tool_display_add(
         ).fetchone()["result_json"])
     assert len(result["auto_activated_ids"]) == 1
     assert result["auto_mode"] == "safe_auto"
+
+
+def test_worker_safe_auto_activates_a_closed_global_typed_add(
+    postgresql_database, monkeypatch,
+):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "safe_auto")
+    message = "以后回答简洁一点"
+    owner, _, _, _ = seed_job(message=message)
+    typed = draft(
+        canonical_key=None,
+        content_text="用户偏好简洁的回答",
+        scope_type="global",
+        scope={},
+        structured={"style": "concise"},
+        source_quote=message,
+    )
+    assert MemoryExtractionWorker(provider=CandidateProvider([typed])).run_once(limit=1) == 1
+
+    repository = LongTermMemoryRepository()
+    active = repository.list_active(owner)
+    assert len(active) == 1
+    assert (active[0]["key"], active[0]["value"]) == ("response_style", "concise")
+    assert active[0]["activation_kind"] == "safe_auto"
+    assert repository.list_candidates(owner) == []
+
+
+def test_worker_safe_auto_does_not_activate_a_scoped_typed_setting(
+    postgresql_database, monkeypatch,
+):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "safe_auto")
+    message = "以后分析财报时详细一点"
+    owner, _, _, _ = seed_job(message=message)
+    scoped = draft(
+        canonical_key="response_style",
+        content_text="detailed",
+        scope_type="tool",
+        scope={"tool_name": "stock_financials"},
+        structured={},
+        source_quote=message,
+        stability="explicit_future",
+    )
+    assert MemoryExtractionWorker(provider=CandidateProvider([scoped])).run_once(limit=1) == 1
+
+    repository = LongTermMemoryRepository()
+    assert repository.list_active(owner) == []
+    assert len(repository.list_candidates(owner)) == 1
 
 
 def test_worker_safe_auto_shadow_records_eligibility_without_activation(

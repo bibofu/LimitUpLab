@@ -75,6 +75,71 @@ def test_only_structured_known_tool_display_columns_are_safe():
     }, key="tool_display:stock_kline").eligible
 
 
+def test_closed_global_typed_setting_add_is_auto_eligible():
+    message = "以后回答简洁一点"
+    result = evaluate(
+        message=message,
+        key="response_style",
+        candidate_changes={
+            "content_text": "concise",
+            "scope_type": "global",
+            "scope": {},
+            "structured": {},
+            "source_quote": message,
+        },
+    )
+    assert result.eligible is True
+    assert result.activation_reason
+
+    assert evaluate(
+        message="以后研究主题只看首板",
+        key="research_topic",
+        candidate_changes={
+            "memory_type": "research_context",
+            "content_text": "首板",
+            "scope_type": "global",
+            "scope": {},
+            "structured": {},
+            "source_quote": "以后研究主题只看首板",
+        },
+    ).eligible is True
+
+
+def test_typed_auto_requires_global_scope_closed_value_and_no_extra_structure():
+    message = "以后回答简洁一点"
+    base = {
+        "content_text": "concise",
+        "scope_type": "global",
+        "scope": {},
+        "structured": {},
+        "source_quote": message,
+    }
+    assert not evaluate(
+        message=message, key="response_style",
+        candidate_changes={**base, "content_text": "随便"},
+    ).eligible
+    assert not evaluate(
+        message=message, key="response_style",
+        candidate_changes={**base, "structured": {"style": "concise"}},
+    ).eligible
+    assert not evaluate(
+        message=message, key="response_style",
+        candidate_changes={
+            **base, "scope_type": "tool",
+            "scope": {"tool_name": "stock_financials"},
+        },
+    ).eligible
+    scoped_message = "以后分析财报时详细一点"
+    assert not evaluate(
+        message=scoped_message, key="response_style",
+        candidate_changes={
+            **base,
+            "content_text": "detailed",
+            "source_quote": scoped_message,
+        },
+    ).eligible
+
+
 def test_evidence_must_be_verbatim_and_contain_persistence_intent():
     assert not evaluate(candidate_changes={"source_quote": "不存在的原文"}).eligible
     assert not evaluate(

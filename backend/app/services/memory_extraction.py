@@ -49,6 +49,73 @@ MAX_CANDIDATES = 5
 MIN_CANDIDATE_CONFIDENCE = 0.7
 
 
+TYPED_STYLE_VALUES = {
+    "concise": "concise", "简洁": "concise",
+    "balanced": "balanced", "适中": "balanced",
+    "detailed": "detailed", "详细": "detailed",
+}
+TYPED_FORMAT_VALUES = {
+    "paragraphs": "paragraphs", "段落": "paragraphs",
+    "bullets": "bullets", "要点列表": "bullets", "要点": "bullets",
+    "table": "table", "表格": "table",
+}
+TYPED_TOPIC_VALUES = {
+    value: value for value in ("首板", "连板", "涨停", "炸板", "行业", "市场情绪")
+}
+
+
+def _typed_value(value: Any, aliases: dict[str, str]) -> str | None:
+    if value is None:
+        return None
+    return aliases.get(str(value).strip().casefold())
+
+
+def _typed_canonical_key(canonical: str) -> str | None:
+    for key in ("response_style", "output_format", "research_topic"):
+        if canonical == key or canonical.endswith(f".{key}") or canonical.endswith(f":{key}"):
+            return key
+    return None
+
+
+def _typed_override(candidate: "MemoryCandidateDraft") -> tuple[str, str, str, str] | None:
+    """Map common model phrasing onto the existing closed typed vocabulary."""
+
+    structured = candidate.structured if isinstance(candidate.structured, dict) else {}
+    if "display_columns" in structured:
+        return None
+    canonical = str(candidate.canonical_key or "").strip()
+    canonical_key = _typed_canonical_key(canonical)
+    style_hint = structured.get("style") or structured.get("response_style")
+    if style_hint is None and canonical_key == "response_style":
+        style_hint = candidate.content_text
+    style = _typed_value(style_hint, TYPED_STYLE_VALUES)
+    if style:
+        return "preference", "response_style", style, candidate.scope_type
+    format_hint = (
+        structured.get("display_format") or structured.get("format")
+        or structured.get("output_format")
+    )
+    if format_hint is None and canonical_key == "output_format":
+        format_hint = candidate.content_text
+    output_format = _typed_value(format_hint, TYPED_FORMAT_VALUES)
+    if output_format:
+        return "preference", "output_format", output_format, candidate.scope_type
+    topic_hint = (
+        structured.get("filter") or structured.get("research_topic")
+        or structured.get("topic")
+    )
+    if topic_hint is None and canonical_key == "research_topic":
+        topic_hint = candidate.content_text
+    topic = _typed_value(topic_hint, TYPED_TOPIC_VALUES)
+    if topic:
+        scope_type = candidate.scope_type
+        if (scope_type == "topic"
+                and str((candidate.scope or {}).get("topic") or "").strip() == topic):
+            scope_type = "global"
+        return "research_context", "research_topic", topic, scope_type
+    return None
+
+
 class MemoryExtractionError(RuntimeError):
     """The extractor could not produce a valid candidate response."""
 
@@ -87,6 +154,15 @@ class MemoryCandidateDraft(BaseModel):
                 and isinstance(self.structured, dict)
                 and "display_columns" in self.structured):
             self.canonical_key = "tool_display:" + tool_name
+        if self.candidate_action == "upsert" and self.memory_type in {
+            "preference", "research_context",
+        }:
+            typed = _typed_override(self)
+            if typed is not None:
+                self.memory_type, self.canonical_key, self.content_text, self.scope_type = typed
+                self.structured = {}
+                if self.scope_type == "global":
+                    self.scope = {}
         if self.candidate_action == "delete":
             if not str(self.canonical_key or "").strip():
                 raise ValueError("Delete candidate requires the existing canonical key")
@@ -199,6 +275,13 @@ SYSTEM_PROMPT = """你是 LimitUpLab 的长期记忆候选提取器。
 7. 不确定时返回空数组。
 tool 作用域使用公开工具 id，如 dragon_tiger_list、stock_kline；
 展示偏好放入 structured.display_columns，如 ["name"]。
+封闭 typed 设置优先使用既有 key 和值：
+preference.response_style=concise|balanced|detailed；
+preference.output_format=paragraphs|bullets|table；
+research_context.research_topic=首板|连板|涨停|炸板|行业|市场情绪。
+typed 设置的 content_text 填对应值，structured 留空。
+“分析财报时详细一点”“看 K 线时用表格”等带条件的偏好必须使用对应 tool scope，
+不能写成 global；无法确定 scope 时不要生成 typed global 候选。
 新增或修改使用 candidate_action="upsert"。
 只有用户明确说“忘记/删除/不要再记住”某条 existing_memories 中的记忆时，才使用
 candidate_action="delete"；必须逐字复制该记忆的 memory_type、canonical_key、
