@@ -168,6 +168,8 @@ class MemoryRecord(BaseModel):
     source_run_id: str | None
     source_user_message: str
     candidate_action: Literal["upsert", "delete"] = "upsert"
+    activation_kind: Literal["none", "manual", "safe_auto"] = "none"
+    activation_reason: str | None = None
     supersedes_memory_id: str | None = None
     supersedes_revision: int | None = None
     created_at: datetime

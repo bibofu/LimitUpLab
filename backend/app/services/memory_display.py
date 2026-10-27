@@ -54,6 +54,12 @@ COLUMN_LABELS = {
 QUERY_COLUMN_TERMS = tuple(COLUMN_ALIASES)
 
 
+def normalize_display_columns(values: Any) -> list[str]:
+    """Normalize display-column aliases for validation and projection."""
+
+    return _normalize_columns(values)
+
+
 def _normalize_columns(values: Any) -> list[str]:
     if not isinstance(values, list):
         return []

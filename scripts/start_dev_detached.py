@@ -28,6 +28,8 @@ FRONTEND_LOG = FRONTEND / "dev_frontend.log"
 FRONTEND_ERR = FRONTEND / "dev_frontend.err.log"
 REFRESH_LOG = BACKEND / "recommendation_refresh.log"
 REFRESH_ERR = BACKEND / "recommendation_refresh.err.log"
+MEMORY_LOG = BACKEND / "memory_extraction.log"
+MEMORY_ERR = BACKEND / "memory_extraction.err.log"
 
 
 def main() -> int:
@@ -119,6 +121,30 @@ def main() -> int:
             env=env,
         )
 
+    memory_mode = (env.get("LIMITUPLAB_MEMORY_AUTO_LEARN") or "safe_auto").strip().lower()
+    llm_enabled = (env.get("LIMITUPLAB_LLM_ENABLED") or "false").strip().lower() not in {
+        "0", "false", "no",
+    }
+    memory_worker_started = False
+    if memory_mode != "off" and llm_enabled:
+        try:
+            memory_running = memory_extraction_worker_running(backend_python, env)
+        except RuntimeError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        if not memory_running:
+            spawn_detached(
+                [
+                    str(backend_python),
+                    "scripts/run_memory_extraction.py",
+                ],
+                cwd=BACKEND,
+                stdout_path=MEMORY_LOG,
+                stderr_path=MEMORY_ERR,
+                env=env,
+            )
+            memory_worker_started = True
+
     backend_ok = wait_for("http://127.0.0.1:8001/ready", seconds=12,
                           expected_database=expected_database)
     frontend_ok = wait_for("http://127.0.0.1:5173/", seconds=12)
@@ -128,6 +154,14 @@ def main() -> int:
     print(f"Backend log:  {BACKEND_LOG}")
     print(f"Frontend log: {FRONTEND_LOG}")
     print(f"Recommendation refresh log: {REFRESH_LOG}")
+    if memory_mode == "off":
+        print("Memory extraction worker: disabled")
+    elif not llm_enabled:
+        print("Memory extraction worker: disabled (LLM disabled)")
+    else:
+        print(f"Memory extraction worker: {'started' if memory_worker_started else 'already running'}"
+              f" ({memory_mode})")
+        print(f"Memory extraction log: {MEMORY_LOG}")
     return 0 if backend_ok and frontend_ok else 1
 
 
@@ -171,6 +205,22 @@ def refresh_worker_running(backend_python: Path, env: dict[str, str]) -> bool:
     )
     if result.returncode not in {0, 3}:
         raise RuntimeError("Cannot check PostgreSQL refresh worker lease; startup aborted")
+    return result.returncode == 0
+
+
+def memory_extraction_worker_running(backend_python: Path, env: dict[str, str]) -> bool:
+    """Read the memory worker's PostgreSQL lease before starting a duplicate."""
+
+    if not env.get("LIMITUPLAB_DATABASE_URL", "").strip():
+        raise RuntimeError("LIMITUPLAB_DATABASE_URL is required")
+    result = subprocess.run(
+        [str(backend_python), "-c",
+         "import sys; from app.services.runtime_coordination import LeaseStore; "
+         "sys.exit(0 if LeaseStore().live('job:memory-extraction') else 3)"],
+        cwd=str(BACKEND), env=env, capture_output=True, timeout=20,
+    )
+    if result.returncode not in {0, 3}:
+        raise RuntimeError("Cannot check PostgreSQL memory worker lease; startup aborted")
     return result.returncode == 0
 
 

@@ -20,6 +20,10 @@
   - 候选增加 `candidate_action=upsert|delete`；
   - DELETE 候选必须携带 active 目标，未找到目标时不生成候选；
   - 增加 `exception_to` 关系索引。
+- 迁移 `0012_memory_auto_activation`：
+  - 增加 `activation_kind=none|manual|safe_auto` 和 `activation_reason`；
+  - 旧的非候选记忆回填为 manual；
+  - 自动激活只由 `safe_auto` 策略写入。
 - 自由文本偏好：
   - `preference` / `research_context` 支持 `preference:`、`tool_display:`、`research:` 前缀；
   - 保留 typed 设置（回答详略、展示格式、研究主题）的封闭值校验；
@@ -58,7 +62,7 @@
   - 展示块存在时，前端移除模型正文中的 Markdown 表格，避免同源表格重复；
   - 当前问题明确要求其他字段时覆盖长期展示偏好；
   - 短期引用优先使用展示块的 `ordered_symbols`，而不是从模型正文猜顺序。
-- 后台候选学习（candidate 模式）：
+- 后台候选学习（candidate / safe_auto 模式）：
   - 正式交付事务写入 `memory_extraction_jobs` outbox，失败/取消/记忆管理轮不入队；
   - worker 使用 `FOR UPDATE SKIP LOCKED` 领取任务，校验 owner、来源消息、开关和已有记忆；
   - Memory Extractor 只读取用户消息，输出结构化候选；
@@ -77,9 +81,19 @@
   - `POST .../reject` 清空候选正文并标记 revoked；
   - `GET .../candidates` 列出待确认候选；
   - 前端不展示记忆候选、确认、忽略或管理入口；长期记忆只作为问答上下文使用；
-  - 候选只通过 owner-scoped API 供后台/运维流程处理，不进入用户界面；
-  - worker 命令：`python backend/scripts/run_memory_extraction.py --once`；
-  - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate`；`safe_auto` 尚未实现。
+  - 非自动候选只通过 owner-scoped API 供后台/运维流程处理，不进入用户界面；
+  - `safe_auto` 只自动激活低风险 ADD：
+    - `tool_display:*`；
+    - 无 active/pending 目标；
+    - `confidence>=0.9` 且 `stability` 为明确未来/明确纠正；
+    - tool scope 与 key 一致；
+    - `structured` 只包含已知 `display_columns`；
+    - `source_quote` 逐字出现在用户消息且包含持续表达；
+    - UPDATE / DELETE / 自由文本 / 未知列 / 无目标冲突候选不自动激活；
+  - 激活来源写入 `activation_kind=manual|safe_auto` 和 `activation_reason`；
+  - `safe_auto_shadow` 只记录本可自动激活的候选，不写 active，用于校准；
+  - worker 命令：`python backend/scripts/run_memory_extraction.py --once`，或在本地启动脚本中自动拉起；
+  - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate|safe_auto_shadow|safe_auto`；默认 `safe_auto`。
 - 写入与删除：
   - 保留 owner revision、record revision、operation receipt、tombstone；
   - 删除清空正文、结构化字段、来源引用和 source quote，保留 scope/canonical identity、内容哈希和状态；
@@ -92,15 +106,16 @@
   - 真实 DeepSeek 四问全部 `complete`；
   - 更新候选验收：已有展示偏好 + 新候选“显示代码和名称”，通过后台 API 确认后旧记忆 superseded、新记忆 active，`memory_relations` 写入 `supersedes`，候选列表清空；
   - 删除候选验收：对已有 `response_style` 生成 DELETE 候选，确认后目标与候选均进入 tombstone，active 列表为空；
-  - 例外关系验收：global `response_style=concise` + tool `stock_financials` `response_style=detailed`，财报 scope 命中时只召回 detailed，并记录 `exception_to` 关系。
+  - 例外关系验收：global `response_style=concise` + tool `stock_financials` `response_style=detailed`，财报 scope 命中时只召回 detailed，并记录 `exception_to` 关系；
+  - `safe_auto` 验收：真实 LLM 从“以后展示龙虎榜只显示股票名称”提取候选，在 `safe_auto` 模式下直接 active；`activation_kind=safe_auto`、候选队列为空、worker 结果记录自动激活 ID。
 
 ## 尚未落地
 
 以下能力明确未完成，不能对外宣称：
 
 1. pgvector 语义检索与同义改写召回；
-2. 候选确认没有用户界面；需要确认时只能由后台/运维 API 处理；
-3. `safe_auto` 自动激活尚未实现；当前候选不会自动生效；
+2. 自动激活目前仅覆盖 `tool_display` 的 ADD；typed 设置、scoped 例外和边界 Judge 尚未接入；
+3. 非自动候选没有前端入口，也没有 TTL/清理任务；需要运维 API 处理；
 4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
 5. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
 6. 只有 `ordered_symbols` 唯一时才能用展示块解析“第二只”；重复股票的榜单仍不可按序号引用；
@@ -117,7 +132,7 @@ canonical_key, structured_json,
 status, management_revision,
 source_kind, source_quote, content_hash,
 supersedes_memory_id, supersedes_revision,
-candidate_action
+candidate_action, activation_kind, activation_reason
 ```
 
 `revision` 继续作为有效内容版本；`management_revision` 预留给候选、使用统计和 embedding 回填，当前不会影响 fingerprint。
@@ -141,7 +156,10 @@ candidate_action
 → Extractor 输出 upsert / delete 候选
 → Consolidator 对比 active / pending candidate
 → add / update / delete / noop / supersede
-→ status='candidate'（显式确认后才 active 或删除目标）
+→ safe_auto 策略
+   → 低风险 tool_display ADD：直接 active，activation_kind=safe_auto
+   → UPDATE / DELETE / 其他：status='candidate'
+→ 非自动候选由后台/运维 API 处理，前端不展示
 ```
 
 ## 检索路径
@@ -158,8 +176,9 @@ owner + active + 未过期 + 未删除
 
 ## 下一步
 
-1. 后台候选运维策略与低风险自动激活；
-2. 接入 pgvector 混合检索与中文评测；
-3. `management_revision` 写入方、`safe_auto` 低风险自动激活；
-4. 抑制展示块与正文列表/文字的重复，并解析重复股票榜单的序号；
-5. 记忆评测集、自动激活校准和迁移演练。
+1. 扩展示例安全自动激活到 typed 设置和 scoped 例外；
+2. 增加非自动候选 TTL、清理任务和后台运维接口；
+3. 接入 pgvector 混合检索与中文评测；
+4. `management_revision` 写入方和边界 Judge LLM；
+5. 抑制展示块与正文列表/文字的重复，并解析重复股票榜单的序号；
+6. 记忆评测集、自动激活校准和迁移演练。

@@ -23,6 +23,7 @@ from app.security import (
 from app.services.llm_provider import LLMResult
 from app.services.memory_extraction import (
     EXTRACTOR_VERSION,
+    MemoryCandidateDraft,
     MemoryExtractionWorker,
     enqueue_memory_extraction_in_connection,
 )
@@ -57,6 +58,14 @@ def draft(**changes):
     }
     value.update(changes)
     return value
+
+
+def test_tool_display_canonical_key_uses_the_public_tool_identity():
+    item = MemoryCandidateDraft.model_validate({
+        **draft(),
+        "canonical_key": "dragon_tiger_list.display_columns",
+    })
+    assert item.canonical_key == "tool_display:dragon_tiger_list"
 
 
 def seed_job(owner=None):
@@ -253,6 +262,82 @@ def test_worker_creates_a_delete_candidate_against_an_existing_memory(
     )
     assert confirmed.current.status == "deleted"
     assert LongTermMemoryRepository().list_active(owner) == []
+
+
+def test_worker_safe_auto_activates_only_the_low_risk_tool_display_add(
+    postgresql_database, monkeypatch,
+):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "safe_auto")
+    owner, _, _, job_id = seed_job()
+    assert MemoryExtractionWorker(provider=CandidateProvider([draft()])).run_once(limit=1) == 1
+
+    repository = LongTermMemoryRepository()
+    assert repository.list_candidates(owner) == []
+    active = repository.list_active(owner)
+    assert len(active) == 1
+    assert active[0]["activation_kind"] == "safe_auto"
+    assert active[0]["source_kind"] == "auto"
+    with closing(connect()) as db:
+        result = json.loads(db.execute(
+            "SELECT result_json FROM memory_extraction_jobs WHERE job_id=?", (job_id,),
+        ).fetchone()["result_json"])
+    assert len(result["auto_activated_ids"]) == 1
+    assert result["auto_mode"] == "safe_auto"
+
+
+def test_worker_safe_auto_shadow_records_eligibility_without_activation(
+    postgresql_database, monkeypatch,
+):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "safe_auto_shadow")
+    owner, _, _, job_id = seed_job()
+    assert MemoryExtractionWorker(provider=CandidateProvider([draft()])).run_once(limit=1) == 1
+
+    repository = LongTermMemoryRepository()
+    assert len(repository.list_active(owner)) == 0
+    candidates = repository.list_candidates(owner)
+    assert len(candidates) == 1
+    assert candidates[0]["activation_kind"] == "none"
+    with closing(connect()) as db:
+        result = json.loads(db.execute(
+            "SELECT result_json FROM memory_extraction_jobs WHERE job_id=?", (job_id,),
+        ).fetchone()["result_json"])
+    assert len(result["auto_shadow_eligible_ids"]) == 1
+    assert result["auto_activated_ids"] == []
+
+
+def test_worker_safe_auto_holds_delete_and_other_review_candidates(
+    postgresql_database, monkeypatch,
+):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "safe_auto")
+    owner, _, _, job_id = seed_job()
+    active = LongTermMemoryRepository().put(owner, MemoryWrite(
+        memory_type="preference", key="response_style", value="concise",
+        source_user_message="以后回答简洁",
+    ), "active-style")
+    deletion = draft(
+        candidate_action="delete",
+        memory_type="preference",
+        canonical_key="response_style",
+        content_text="不要再记住回答要简洁",
+        scope_type="global",
+        scope={},
+        structured={},
+        source_quote=MESSAGE,
+        stability="explicit_correction",
+    )
+    assert MemoryExtractionWorker(provider=CandidateProvider([deletion])).run_once(limit=1) == 1
+
+    repository = LongTermMemoryRepository()
+    assert repository.get(owner, active.current.memory_id).status == "active"
+    candidate = repository.list_candidates(owner)
+    assert len(candidate) == 1
+    assert candidate[0]["activation_kind"] == "none"
+    with closing(connect()) as db:
+        result = json.loads(db.execute(
+            "SELECT result_json FROM memory_extraction_jobs WHERE job_id=?", (job_id,),
+        ).fetchone()["result_json"])
+    assert result["auto_activated_ids"] == []
+    assert result["auto_held_count"] == 1
 
 
 def test_worker_normalizes_tool_id_and_skips_low_confidence_candidates(postgresql_database, monkeypatch):

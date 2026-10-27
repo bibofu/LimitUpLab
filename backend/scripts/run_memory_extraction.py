@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.config import configure_runtime_environment
 from app.services.llm_provider import get_llm_provider
 from app.services.memory_extraction import MemoryExtractionWorker, auto_learn_mode
+from app.services.runtime_coordination import LeaseStore
 
 
 def main(argv=None):
@@ -26,11 +27,16 @@ def main(argv=None):
     if mode == "off":
         print(json.dumps({"mode": mode, "processed": 0}, ensure_ascii=False))
         return 0
+    lease = LeaseStore().claim("job:memory-extraction", ttl=300)
+    if lease is None:
+        print(json.dumps({"mode": mode, "skipped": "already_running"}, ensure_ascii=False))
+        return 0
+    lease.start_heartbeat()
     provider = get_llm_provider()
     worker = MemoryExtractionWorker(provider=provider)
     total = 0
     try:
-        while True:
+        while not lease.lost.is_set():
             processed = worker.run_once(limit=args.limit)
             total += processed
             print(json.dumps({"mode": mode, "processed": processed, "total": total},
@@ -39,8 +45,11 @@ def main(argv=None):
                 return 0
             if processed == 0:
                 sleep(max(1.0, args.interval))
+        return 1
     except KeyboardInterrupt:
         return 0
+    finally:
+        lease.release()
 
 
 if __name__ == "__main__":

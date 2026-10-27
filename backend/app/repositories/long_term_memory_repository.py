@@ -380,6 +380,7 @@ class LongTermMemoryRepository:
                     metadata_json=?,scope_json=?,scope_key=?,canonical_key=?,structured_json=?,
                     source_quote=?,content_hash=?,expires_at=?,source_run_id=?,source_user_message=?,
                     status='active',source_kind='explicit',candidate_action='upsert',
+                    activation_kind='manual',activation_reason=NULL,
                     deleted_at=NULL,supersedes_memory_id=NULL,supersedes_revision=NULL,
                     revision=revision+1,updated_at=clock_timestamp()
                     WHERE owner_id=? AND memory_id=? AND revision=?""",
@@ -389,8 +390,9 @@ class LongTermMemoryRepository:
                     (memory_id,owner_id,memory_type,memory_key,revision,value,topics_json,metadata_json,
                      scope_json,scope_key,canonical_key,structured_json,source_quote,content_hash,
                      expires_at,source_run_id,source_user_message,scope_type,status,source_kind,
-                     candidate_action)
-                    VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'active','explicit','upsert')""",
+                     candidate_action,activation_kind)
+                    VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'active','explicit',
+                           'upsert','manual')""",
                     (memory_id, owner_id, write.memory_type, write.key, *values,
                      write.scope_type))
             self._link_exception_relations(
@@ -629,9 +631,16 @@ class LongTermMemoryRepository:
                 (owner_id, max(1, min(limit, 200)))).fetchall()
             return [_record(row).model_dump(mode="json") for row in rows]
 
-    def confirm_candidate(self, owner_id, memory_id, operation_id):
+    def confirm_candidate(
+        self, owner_id, memory_id, operation_id, *,
+        activation_kind="manual", activation_reason=None,
+    ):
         """Atomically activate a candidate and supersede its exact target."""
 
+        if activation_kind not in {"manual", "safe_auto"}:
+            raise ValueError("Unsupported memory activation kind")
+        if activation_reason is not None:
+            activation_reason = str(activation_reason)[:500]
         fingerprint = self._fingerprint("put", [memory_id, None], operation_id)
         with self._connection() as db:
             begin_write(db)
@@ -676,9 +685,11 @@ class LongTermMemoryRepository:
                         metadata_json='{}',structured_json='{}',source_quote=NULL,
                         source_run_id=NULL,source_user_message='',expires_at=NULL,
                         status='deleted',deleted_at=clock_timestamp(),
+                        activation_kind=?,activation_reason=?,
                         updated_at=clock_timestamp(),revision=revision+1
                         WHERE owner_id=? AND memory_id=? AND revision=? AND status='candidate'""",
-                        (owner_id, memory_id, row["revision"]))
+                        (activation_kind, activation_reason,
+                         owner_id, memory_id, row["revision"]))
                     self._relation(db, owner_id, memory_id, target_id, "supersedes",
                                    "explicit deletion candidate confirmation")
                     return self._finish(
@@ -710,9 +721,10 @@ class LongTermMemoryRepository:
                         "An active memory already exists for this identity; refresh candidates"
                     )
             db.execute("""UPDATE long_term_memories SET status='active',
+                activation_kind=?,activation_reason=?,
                 revision=revision+1,updated_at=clock_timestamp()
                 WHERE owner_id=? AND memory_id=? AND revision=? AND status='candidate'""",
-                (owner_id, memory_id, row["revision"]))
+                (activation_kind, activation_reason, owner_id, memory_id, row["revision"]))
             self._link_exception_relations(
                 db, owner_id, memory_id, row["memory_type"], canonical_key, row["scope_type"],
             )

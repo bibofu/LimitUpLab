@@ -29,6 +29,7 @@ from app.repositories.long_term_memory_repository import (
     MemoryConflict,
     MemoryNotFound,
 )
+from app.services.memory_auto_policy import evaluate_safe_auto_candidate
 from app.services.llm_provider import (
     LLMProvider,
     NativeFunctionCallingError,
@@ -39,8 +40,8 @@ from app.services.llm_provider import (
 
 EXTRACTOR_VERSION = "memory-extractor-v2"
 AUTO_LEARN_ENV = "LIMITUPLAB_MEMORY_AUTO_LEARN"
-AUTO_LEARN_MODES = {"off", "candidate"}
-DEFAULT_AUTO_LEARN_MODE = "candidate"
+AUTO_LEARN_MODES = {"off", "candidate", "safe_auto", "safe_auto_shadow"}
+DEFAULT_AUTO_LEARN_MODE = "safe_auto"
 JOB_LEASE_SECONDS = 300
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 60
@@ -77,8 +78,15 @@ class MemoryCandidateDraft(BaseModel):
         if self.canonical_key and self.canonical_key.startswith("tool_display:"):
             label = self.canonical_key.split(":", 1)[1].strip()
             self.canonical_key = "tool_display:" + TOOL_NAME_ALIASES.get(label, label)
-        if self.scope_type == "tool" and not str(self.scope.get("tool_name") or "").strip():
+        tool_name = str(self.scope.get("tool_name") or "").strip()
+        if self.scope_type == "tool" and not tool_name:
             raise ValueError("Tool candidate requires scope.tool_name")
+        # The model sometimes invents dotted canonical keys for display policies.
+        # Tool display identity is always driven by the public tool id.
+        if (self.candidate_action == "upsert" and self.scope_type == "tool"
+                and isinstance(self.structured, dict)
+                and "display_columns" in self.structured):
+            self.canonical_key = "tool_display:" + tool_name
         if self.candidate_action == "delete":
             if not str(self.canonical_key or "").strip():
                 raise ValueError("Delete candidate requires the existing canonical key")
@@ -341,12 +349,15 @@ class MemoryExtractionWorker:
             self._finish(job, "skipped", {"reason": "source_message_missing"})
             return
         repository = LongTermMemoryRepository(self.database_url)
+        mode = auto_learn_mode()
         existing = repository.list_active(job["owner_id"], limit=50)
         candidates = extract_memory_candidates(
             self.provider, message=message, existing=existing,
         )
         created, skipped = [], 0
         decisions = {"add": 0, "update": 0, "delete": 0, "refresh": 0, "noop": 0, "replay": 0}
+        auto_activated, auto_shadow, auto_errors = [], [], []
+        auto_held = 0
         for index, candidate in enumerate(candidates):
             if (candidate.confidence < MIN_CANDIDATE_CONFIDENCE
                     or candidate.stability == "other"):
@@ -366,12 +377,49 @@ class MemoryExtractionWorker:
                     created.append(result["candidate_id"])
                 else:
                     skipped += 1
+                if mode in {"safe_auto", "safe_auto_shadow"} and result["candidate_id"]:
+                    evaluation = evaluate_safe_auto_candidate(
+                        candidate,
+                        key=write.key,
+                        message=message,
+                        consolidation=result,
+                    )
+                    if evaluation.eligible:
+                        audit = {
+                            "candidate_id": result["candidate_id"],
+                            "reasons": list(evaluation.reasons),
+                            "risk": evaluation.risk,
+                        }
+                        if mode == "safe_auto_shadow":
+                            auto_shadow.append(audit)
+                        else:
+                            try:
+                                repository.confirm_candidate(
+                                    job["owner_id"], result["candidate_id"],
+                                    f"{job['job_id']}:auto:{index}",
+                                    activation_kind="safe_auto",
+                                    activation_reason=evaluation.activation_reason,
+                                )
+                                auto_activated.append(audit)
+                                if result["candidate_id"] in created:
+                                    created.remove(result["candidate_id"])
+                            except (MemoryConflict, MemoryNotFound, ValueError) as error:
+                                auto_errors.append({
+                                    **audit, "error": type(error).__name__,
+                                })
+                    else:
+                        auto_held += 1
             except (MemoryConflict, MemoryNotFound, ValueError):
                 skipped += 1
         self._finish(job, "succeeded", {
             "candidate_ids": created, "created_count": len(created),
             "skipped_count": skipped, "candidate_count": len(candidates),
-            "decisions": decisions,
+            "decisions": decisions, "auto_mode": mode,
+            "auto_activated_ids": [item["candidate_id"] for item in auto_activated],
+            "auto_shadow_eligible_ids": [item["candidate_id"] for item in auto_shadow],
+            "auto_held_count": auto_held,
+            "auto_errors": auto_errors,
+            "auto_policy_version": "safe-auto-v1",
         })
 
     def _finish(self, job, status, result):
