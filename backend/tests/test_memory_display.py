@@ -70,6 +70,40 @@ def test_display_policy_can_be_derived_when_structured_fields_are_absent():
     assert policies[0]["columns"] == ["name"]
 
 
+def test_duplicate_symbols_keep_display_order_and_ordinal_resolution():
+    observation = {
+        "name": "dragon_tiger_list",
+        "row_count": 3,
+        "truncated": False,
+        "rows": [
+            {"symbol": "000001", "name": "样本甲", "net_buy_amount": 100},
+            {"symbol": "000001", "name": "样本甲", "net_buy_amount": 90},
+            {"symbol": "000002", "name": "样本乙", "net_buy_amount": 80},
+        ],
+    }
+    policies = display_policies_for([memory_item()], "展示最新的龙虎榜")
+    blocks = build_display_blocks([observation], policies)
+    assert blocks[0]["ordered_symbols"] == ["000001", "000001", "000002"]
+    response = {
+        "run_id": "run-duplicate-display",
+        "task_status": "complete",
+        "answer": "样本甲、样本甲、样本乙",
+        "tool_results": [{
+            "name": "dragon_tiger_list",
+            "status": "success",
+            "output": {
+                "rows": observation["rows"],
+                "row_count": 3,
+            },
+        }],
+        "display_blocks": [{**blocks[0], "source_tool_index": 0}],
+    }
+    references = references_from_committed_result("run-duplicate-display", response)
+    assert references[0]["ordinal_resolvable"] is True
+    assert references[0]["reference_type"] == "display_block"
+    assert references[0]["ordered_symbols"] == ["000001", "000001", "000002"]
+
+
 def test_display_block_order_is_used_before_answer_prose_for_ordinals():
     response = {
         "run_id": "run-display",

@@ -159,8 +159,6 @@ def _display_block_order(
             return None
         if any(symbol not in identities for symbol in symbols):
             return None
-        if len(set(symbols)) != len(symbols):
-            return None
         return symbols
     return None
 
@@ -542,6 +540,7 @@ def _resolve_entities_from_referents(reviewed, referents: dict[str, Any],
     symbols = ordered or list(dict.fromkeys(_symbol(item["symbol"]) for item in stocks))
     ordinal = reviewed.ordinal
     if reviewed.all_entities:
+        symbols = list(dict.fromkeys(symbols))
         if not symbols:
             return {"status": "clarify", "clarification": "上一轮没有可解析的股票实体。"}
         if _page_conflict(symbols, page_context):

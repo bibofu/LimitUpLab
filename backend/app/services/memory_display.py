@@ -187,7 +187,7 @@ def build_display_blocks(
             or observation.get("source_truncated")
             or len(projected) < row_count
         )
-        if len(ordered_symbols) != len(projected) or len(set(ordered_symbols)) != len(ordered_symbols):
+        if len(ordered_symbols) != len(projected):
             symbols_complete = False
         blocks.append({
             "kind": "table",

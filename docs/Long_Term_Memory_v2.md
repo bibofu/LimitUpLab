@@ -73,7 +73,8 @@
   - 展示块存在时，前端移除模型正文中的 Markdown 表格，避免同源表格重复；
   - 回答 system prompt 会明确告知服务端将渲染哪些工具/列，并要求正文不要重复完整表格、完整行或同义逐行名单；用户本轮明确要求完整名单时仍以用户要求为准；
   - 当前问题明确要求其他字段时覆盖长期展示偏好；
-  - 短期引用优先使用展示块的 `ordered_symbols`，而不是从模型正文猜顺序。
+  - 短期引用优先使用展示块的 `ordered_symbols`，而不是从模型正文猜顺序；
+  - 重复股票行保留展示顺序，仍可按“第二只”解析到同一 symbol；全量列举时再去重。
 - 后台候选学习（candidate / safe_auto 模式）：
   - 正式交付事务写入 `memory_extraction_jobs` outbox，失败/取消/记忆管理轮不入队；
   - worker 使用 `FOR UPDATE SKIP LOCKED` 领取任务，校验 owner、来源消息、开关和已有记忆；
@@ -138,6 +139,7 @@
   - typed 自动激活验收：模型输出的 `structured.style/display_format` 与 dotted key 被规范化为 `response_style/output_format` 封闭值；全局“回答简洁”、tool-scoped“分析财报时详细”和 entity-scoped“分析600519时详细”均自动激活，scoped 版本分别写入 tool/symbol 作用域及 `exception_to`（存在 global 时）；condition 只有在短语逐字命中时自动激活，低置信度真实提取仍保持候选。
   - 运行时 scope 验收：真实 Graph 在“展示最新的龙虎榜”问题中把 scoped tool 记忆标记为 `scope_verified=true`，而不是只在单元测试中验证；
   - 请求上下文验收：股票详情追问“它近期走势怎么样”时，使用请求 `symbol` 作为 entity scope 兜底；问题内出现其他代码时以问题代码为准。
+  - 重复榜单验收：三行展示块包含重复 symbol 时，`ordered_symbols` 保留重复顺序，`ordinal_resolvable=true`，reference 类型为 `display_block`。
   - candidate TTL 验收：候选写入 30 天 TTL，过期为 expired、正文清空、从候选 API 隐藏；确认后 active 的 `candidate_expires_at` 为空。
   - safe_auto 校准验收：10 条 live 用例覆盖 tool/global/tool-exception/entity/topic/临时/delete/行情/交易/condition，结果为 TP=5、TN=5、FP=0、FN=0。
   - Judge 验收：真实 DeepSeek 对 `confidence=0.75` 的 condition 候选返回 `approve + low risk`；单元测试验证 Judge 只能复核 scoped 边界，全局 typed 和结构不合格候选不会进入 Judge。
@@ -151,7 +153,7 @@
 3. 非自动候选没有前端入口，只能由运维 API 处理；TTL 已清理过期候选；
 4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
 5. 展示块已移除 Markdown 表格并增加 prompt 去重约束，但模型正文中的列表或普通文字仍可能重复；尚未做硬性正文裁剪；
-6. 只有 `ordered_symbols` 唯一时才能用展示块解析“第二只”；重复股票的榜单仍不可按序号引用；
+6. 重复股票行已保留展示顺序并支持序号引用；但同一 symbol 的多个行无法区分具体是哪一条记录；
 7. 旧数据迁移到新表后的长期双读/回滚演练；
 8. 记忆评测集与自动激活校准。
 
