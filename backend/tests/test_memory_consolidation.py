@@ -1,6 +1,7 @@
 """Candidate consolidation, exact-target confirmation and scope identity."""
 
 from contextlib import closing
+from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
 import pytest
@@ -325,3 +326,20 @@ def test_same_key_can_coexist_across_scopes_instead_of_overwriting(postgresql_da
     assert decision["target_memory_id"] == next(
         item["memory_id"] for item in active if item["scope"]["topic"] == "首板"
     )
+
+def test_expired_active_memories_are_swept_without_content_revision_change(postgresql_database):
+    repository = LongTermMemoryRepository()
+    user = owner()
+    memory = display_memory().model_copy(update={
+        "expires_at": datetime.now(timezone.utc) - timedelta(days=1),
+    })
+    saved = repository.put(user, memory, "expired-active")
+    assert repository.list_active(user) == []
+    assert repository.get(user, saved.current.memory_id, include_inactive=True).status == "active"
+
+    assert repository.expire_active_memories() == 1
+    current = repository.get(user, saved.current.memory_id, include_inactive=True)
+    assert current.status == "expired"
+    assert current.revision == saved.current.revision
+    assert repository.get_owner_revision(user) == saved.owner_revision
+    assert repository.expire_active_memories() == 0

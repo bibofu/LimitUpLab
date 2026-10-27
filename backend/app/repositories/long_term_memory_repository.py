@@ -683,6 +683,24 @@ class LongTermMemoryRepository:
             db.commit()
             return len(rows)
 
+    def expire_active_memories(self, *, limit=200):
+        """Mark effective memories whose expiry has passed as expired."""
+
+        with self._connection() as db:
+            begin_write(db)
+            rows = db.execute("""WITH expired AS (
+                SELECT memory_id FROM long_term_memories
+                WHERE status='active' AND deleted_at IS NULL
+                  AND expires_at IS NOT NULL AND expires_at<=clock_timestamp()
+                ORDER BY expires_at LIMIT ? FOR UPDATE SKIP LOCKED
+            )
+            UPDATE long_term_memories AS memory
+            SET status='expired',updated_at=clock_timestamp()
+            FROM expired WHERE memory.memory_id=expired.memory_id
+            RETURNING memory.memory_id""", (max(1, min(limit, 500)),)).fetchall()
+            db.commit()
+            return len(rows)
+
     def confirm_candidate(
         self, owner_id, memory_id, operation_id, *,
         activation_kind="manual", activation_reason=None,

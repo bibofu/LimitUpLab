@@ -429,13 +429,14 @@ class MemoryExtractionWorker:
         self.provider = provider or get_llm_provider()
         self.worker_id = worker_id or "memory-worker-" + uuid4().hex[:12]
         self.last_expired_candidates = 0
+        self.last_expired_memories = 0
 
     def run_once(self, *, limit: int = 5) -> int:
         if auto_learn_mode() == "off":
             return 0
-        self.last_expired_candidates = LongTermMemoryRepository(
-            self.database_url,
-        ).expire_candidates()
+        maintenance = LongTermMemoryRepository(self.database_url)
+        self.last_expired_candidates = maintenance.expire_candidates()
+        self.last_expired_memories = maintenance.expire_active_memories()
         processed = 0
         for _ in range(max(1, min(limit, 50))):
             job = self._claim()
