@@ -199,6 +199,8 @@
   - pgvector 验收（2026-10-28）：本地 Docker 使用 `pgvector/pgvector:pg18`，`vector=0.8.7`，业务库升级到 `0015_memory_embeddings`；17 条 active 记忆全部回填 512 维 BGE 向量。
   - 混合检索验收：`memory_vector_status=ready`，`stock_kline` scoped `response_style=detailed` 在“贵州茅台最近K线走势”查询中通过 `exception_to` 抑制 global concise，`vector_similarity=0.3195`，`memory_vector_hit_count=1`。
   - 真实 Agent 验证（2026-10-28）：在 Docker pgvector 业务库和 embedding worker 运行时，“2026-10-27 的涨停池有哪些股票？”“贵州茅台的主营业务是什么？”“2026-10-27 的龙虎榜有哪些股票？”均 `complete`，且 `memory_context_used=true`；“贵州茅台最近K线走势怎么样？”仍为 `partial`，原因是 `stock_kline` 数据源部分字段缺失，不是记忆或向量检索链路问题。
+  - 自动写入与跨会话召回验收（2026-10-28）：新 owner 显式保存 `tool_display:dragon_tiger_list` 后，embedding worker 回填向量；新会话“展示最新的龙虎榜”返回单列 `name` 展示块、`row_count=87`，`memory_context_used=true`，同 owner 的“贵州茅台主营业务”没有龙虎榜展示块，说明 tool scope 未泄漏。
+  - 语义召回验收（2026-10-28）：同一 owner 保存 topic-scoped 研究记忆“研究首板接力时关注二板晋级率和炸板率”；新会话用无直接词法重叠的“打板后第二天还能不能继续走强看什么”提问，Agent 返回 `complete`，该记忆 `use_count=1`、`last_used_at` 更新，证明 BGE 语义召回在真实 Graph 中生效，而不是只在离线评测中生效。
   - 回归验收（2026-10-28）：使用 Docker `limituplab_test` 数据库运行完整后端测试，`2046 passed, 1 skipped, 22 subtests passed`；前端 243 项测试通过，生产构建通过。
   - 检索评测验收（2026-10-28）：25 个固定查询上，词法基线 exact `20/25`、recall `0.783`；校准后混合检索 exact `22/25`、recall `0.913`，误注入从 `0/23` 增至 `1/23`，平均 token 从 621 增至 722；阈值由 0.25 提升到 0.50，向量权重由 12 降到 6。
 
