@@ -114,7 +114,11 @@
   - 安全自动激活边界由 `tests/test_memory_auto_golden.py` 的固定用例覆盖；
   - live 校准：`python backend/scripts/evaluate_memory_auto.py --live`，输出 TP/TN/FP/FN 与逐案决策；
   - worker 命令：`python backend/scripts/run_memory_extraction.py --once`，或在本地启动脚本中自动拉起；
-  - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate|safe_auto_shadow|safe_auto`；默认 `safe_auto`。
+  - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate|safe_auto_shadow|safe_auto|safe_auto_judge`；默认 `safe_auto`；
+  - `safe_auto_judge` 仅对通过结构安全检查、但因置信度或条件稳定性被拒绝的 scoped typed/display 候选调用 Judge；
+  - Judge 只能输出 approve/hold/reject，必须 `approve + low risk` 才生效，错误或非法输出一律 hold；
+  - Judge 不能覆盖结构、作用域、目标或删除边界；激活记录 `activation_kind=safe_auto`，`activation_reason` 带 `judge_auto` 前缀；
+  - `result_json.auto_decisions` 记录 judge decision、risk、reason 和版本；
 - 写入与删除：
   - 保留 owner revision、record revision、operation receipt、tombstone；
   - 删除清空正文、结构化字段、来源引用和 source quote，保留 scope/canonical identity、内容哈希和状态；
@@ -134,13 +138,14 @@
   - 请求上下文验收：股票详情追问“它近期走势怎么样”时，使用请求 `symbol` 作为 entity scope 兜底；问题内出现其他代码时以问题代码为准。
   - candidate TTL 验收：候选写入 30 天 TTL，过期为 expired、正文清空、从候选 API 隐藏；确认后 active 的 `candidate_expires_at` 为空。
   - safe_auto 校准验收：10 条 live 用例覆盖 tool/global/tool-exception/entity/topic/临时/delete/行情/交易/condition，结果为 TP=5、TN=5、FP=0、FN=0。
+  - Judge 验收：真实 DeepSeek 对 `confidence=0.75` 的 condition 候选返回 `approve + low risk`；单元测试验证 Judge 只能复核 scoped 边界，全局 typed 和结构不合格候选不会进入 Judge。
 
 ## 尚未落地
 
 以下能力明确未完成，不能对外宣称：
 
 1. pgvector 语义检索与同义改写召回；
-2. 自动激活覆盖 `tool_display`、全局封闭 typed，以及 tool/entity/精确 condition 作用域的 `response_style/output_format` 例外；condition 仍不支持语义匹配，边界 Judge 尚未接入；scope hint 仍是词法推断，名称同义词不一定识别；
+2. 自动激活覆盖 `tool_display`、全局封闭 typed，以及 tool/entity/精确 condition 作用域的 `response_style/output_format` 例外；`safe_auto_judge` 是可选边界复核；condition 仍不支持语义匹配；scope hint 仍是词法推断，名称同义词不一定识别；
 3. 非自动候选没有前端入口，只能由运维 API 处理；TTL 已清理过期候选；
 4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
 5. 展示块已移除 Markdown 表格并增加 prompt 去重约束，但模型正文中的列表或普通文字仍可能重复；尚未做硬性正文裁剪；
@@ -203,9 +208,9 @@ owner + active + 未过期 + 未删除
 
 ## 下一步
 
-1. 运行 shadow 校准并评估 condition 精确短语的命中率；
+1. 运行 shadow / judge shadow 校准，评估边界 Judge 的误放行率；
 2. 增加后台候选运维接口；
 3. 接入 pgvector 混合检索与中文评测；
-4. `management_revision` 写入方和边界 Judge LLM；
+4. `management_revision` 写入方；
 5. 抑制展示块与正文列表/文字的重复，并解析重复股票榜单的序号；
 6. 记忆评测集、自动激活校准和迁移演练。

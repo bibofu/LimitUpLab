@@ -44,6 +44,22 @@ class CandidateProvider:
         )
 
 
+class JudgeCandidateProvider(CandidateProvider):
+    def __init__(self, memories, verdict):
+        super().__init__(memories)
+        self.verdict = verdict
+        self.judge_calls = 0
+
+    def generate_function_call(self, *args, **kwargs):
+        if kwargs.get("function_name") == "submit_memory_judgement":
+            self.judge_calls += 1
+            return LLMResult(
+                content=json.dumps(self.verdict, ensure_ascii=False),
+                model="fixture", provider="fixture",
+            )
+        return super().generate_function_call(*args, **kwargs)
+
+
 def draft(**changes):
     value = {
         "memory_type": "preference",
@@ -187,6 +203,22 @@ def test_model_typed_hints_are_normalized_to_closed_settings():
     assert (entity_condition.canonical_key, entity_condition.scope_type,
             entity_condition.scope) == (
         "response_style", "entity", {"symbol": "600519"},
+    )
+
+    dotted_condition = MemoryCandidateDraft.model_validate({
+        **draft(),
+        "canonical_key": "preference.response_style.market_crash",
+        "content_text": "市场大跌时希望分析更详细",
+        "scope_type": "condition",
+        "scope": {"condition": "市场大跌"},
+        "structured": {"preference.response_style": "detailed"},
+        "source_quote": "以后市场大跌时详细一点",
+        "confidence": 0.75,
+        "stability": "conditional_scope",
+    })
+    assert (dotted_condition.canonical_key, dotted_condition.content_text,
+            dotted_condition.scope, dotted_condition.structured) == (
+        "response_style", "detailed", {"condition": "市场大跌"}, {},
     )
 
 
@@ -522,6 +554,39 @@ def test_worker_safe_auto_activates_a_condition_scoped_typed_exception(
     )
     assert active[0]["activation_kind"] == "safe_auto"
     assert repository.list_candidates(owner) == []
+
+
+def test_worker_judge_activates_a_borderline_condition_candidate(
+    postgresql_database, monkeypatch,
+):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "safe_auto_judge")
+    message = "以后市场大跌时详细一点"
+    owner, _, _, _ = seed_job(message=message)
+    scoped = draft(
+        canonical_key="response_style",
+        content_text="detailed",
+        scope_type="condition",
+        scope={"condition": "市场大跌时"},
+        structured={},
+        source_quote=message,
+        confidence=0.75,
+        stability="conditional_scope",
+    )
+    provider = JudgeCandidateProvider(
+        [scoped], {"decision": "approve", "risk": "low", "reason": "明确条件偏好"},
+    )
+    assert MemoryExtractionWorker(provider=provider).run_once(limit=1) == 1
+
+    repository = LongTermMemoryRepository()
+    active = repository.list_active(owner)
+    assert len(active) == 1
+    assert (active[0]["value"], active[0]["scope"]) == (
+        "detailed", {"condition": "市场大跌时"},
+    )
+    assert active[0]["activation_kind"] == "safe_auto"
+    assert "judge_auto" in (active[0]["activation_reason"] or "")
+    assert repository.list_candidates(owner) == []
+    assert provider.judge_calls == 1
 
 
 def test_worker_safe_auto_shadow_records_eligibility_without_activation(

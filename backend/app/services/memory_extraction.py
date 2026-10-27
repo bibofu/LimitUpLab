@@ -31,6 +31,12 @@ from app.repositories.long_term_memory_repository import (
 )
 from app.memory_terms import symbols_in_text, tools_in_text
 from app.services.memory_auto_policy import evaluate_safe_auto_candidate
+from app.services.memory_judge import (
+    JUDGE_VERSION,
+    JudgeUnavailable,
+    judge_candidate,
+    judgeable_candidate,
+)
 from app.services.llm_provider import (
     LLMProvider,
     NativeFunctionCallingError,
@@ -41,7 +47,7 @@ from app.services.llm_provider import (
 
 EXTRACTOR_VERSION = "memory-extractor-v2"
 AUTO_LEARN_ENV = "LIMITUPLAB_MEMORY_AUTO_LEARN"
-AUTO_LEARN_MODES = {"off", "candidate", "safe_auto", "safe_auto_shadow"}
+AUTO_LEARN_MODES = {"off", "candidate", "safe_auto", "safe_auto_shadow", "safe_auto_judge"}
 DEFAULT_AUTO_LEARN_MODE = "safe_auto"
 CANDIDATE_TTL_ENV = "LIMITUPLAB_MEMORY_CANDIDATE_TTL_DAYS"
 DEFAULT_CANDIDATE_TTL_DAYS = 30
@@ -72,9 +78,19 @@ def _typed_value(value: Any, aliases: dict[str, str]) -> str | None:
 
 
 def _typed_canonical_key(canonical: str) -> str | None:
+    parts = set(canonical.replace(":", ".").split("."))
     for key in ("response_style", "output_format", "research_topic"):
-        if canonical == key or canonical.endswith(f".{key}") or canonical.endswith(f":{key}"):
+        if canonical == key or key in parts:
             return key
+    return None
+
+
+def _structured_hint(structured: dict[str, Any], field: str) -> Any:
+    for key, value in structured.items():
+        if not isinstance(value, str):
+            continue
+        if key == field or key.replace(":", ".").split(".")[-1] == field:
+            return value
     return None
 
 
@@ -93,6 +109,7 @@ def _typed_override(candidate: "MemoryCandidateDraft") -> tuple[str, str, str, s
     style_hint = (
         structured.get("style") or structured.get("response_style")
         or nested_preference.get("response_style")
+        or _structured_hint(structured, "response_style")
     )
     if style_hint is None and canonical_key == "response_style":
         style_hint = candidate.content_text
@@ -102,6 +119,7 @@ def _typed_override(candidate: "MemoryCandidateDraft") -> tuple[str, str, str, s
     format_hint = (
         structured.get("display_format") or structured.get("format")
         or structured.get("output_format") or nested_preference.get("output_format")
+        or _structured_hint(structured, "output_format")
     )
     if format_hint is None and canonical_key == "output_format":
         format_hint = candidate.content_text
@@ -111,6 +129,7 @@ def _typed_override(candidate: "MemoryCandidateDraft") -> tuple[str, str, str, s
     topic_hint = (
         structured.get("filter") or structured.get("research_topic")
         or structured.get("topic") or nested_research.get("research_topic")
+        or _structured_hint(structured, "research_topic")
     )
     if topic_hint is None and canonical_key == "research_topic":
         topic_hint = candidate.content_text
@@ -493,19 +512,19 @@ class MemoryExtractionWorker:
                     created.append(result["candidate_id"])
                 else:
                     skipped += 1
-                if mode in {"safe_auto", "safe_auto_shadow"} and result["candidate_id"]:
+                if mode in {"safe_auto", "safe_auto_shadow", "safe_auto_judge"} and result["candidate_id"]:
                     evaluation = evaluate_safe_auto_candidate(
                         candidate,
                         key=write.key,
                         message=message,
                         consolidation=result,
                     )
+                    audit = {
+                        "candidate_id": result["candidate_id"],
+                        "reasons": list(evaluation.reasons),
+                        "risk": evaluation.risk,
+                    }
                     if evaluation.eligible:
-                        audit = {
-                            "candidate_id": result["candidate_id"],
-                            "reasons": list(evaluation.reasons),
-                            "risk": evaluation.risk,
-                        }
                         if mode == "safe_auto_shadow":
                             auto_shadow.append(audit)
                             auto_decisions.append({**audit, "outcome": "shadow"})
@@ -529,14 +548,76 @@ class MemoryExtractionWorker:
                                     **audit, "outcome": "error",
                                     "error": type(error).__name__,
                                 })
+                    elif mode == "safe_auto_judge":
+                        judgeable, _ = judgeable_candidate(
+                            candidate,
+                            key=write.key,
+                            message=message,
+                            consolidation=result,
+                        )
+                        if not judgeable:
+                            auto_held += 1
+                            auto_decisions.append({
+                                **audit, "outcome": "held",
+                            })
+                        else:
+                            try:
+                                verdict = judge_candidate(
+                                    self.provider, message=message, candidate=candidate,
+                                    existing=existing,
+                                )
+                            except JudgeUnavailable as error:
+                                auto_held += 1
+                                auto_decisions.append({
+                                    **audit, "outcome": "judge_held",
+                                    "judge_error": type(error).__name__,
+                                    "judge_version": JUDGE_VERSION,
+                                })
+                                continue
+                            judge_audit = {
+                                **audit,
+                                "judge_decision": verdict.decision,
+                                "judge_risk": verdict.risk,
+                                "judge_reason": verdict.reason,
+                                "judge_version": JUDGE_VERSION,
+                            }
+                            if verdict.decision == "approve" and verdict.risk == "low":
+                                try:
+                                    repository.confirm_candidate(
+                                        job["owner_id"], result["candidate_id"],
+                                        f"{job['job_id']}:judge:{index}",
+                                        activation_kind="safe_auto",
+                                        activation_reason=(
+                                            f"judge_auto:{JUDGE_VERSION}:{verdict.reason}"
+                                        ),
+                                    )
+                                    auto_activated.append(judge_audit)
+                                    auto_decisions.append({
+                                        **judge_audit, "outcome": "judge_activated",
+                                    })
+                                    if result["candidate_id"] in created:
+                                        created.remove(result["candidate_id"])
+                                except (MemoryConflict, MemoryNotFound, ValueError) as error:
+                                    auto_errors.append({
+                                        **judge_audit, "error": type(error).__name__,
+                                    })
+                                    auto_decisions.append({
+                                        **judge_audit, "outcome": "error",
+                                        "error": type(error).__name__,
+                                    })
+                            else:
+                                auto_held += 1
+                                auto_decisions.append({
+                                    **judge_audit,
+                                    "outcome": (
+                                        "judge_rejected"
+                                        if verdict.decision == "reject" else "judge_held"
+                                    ),
+                                })
                     else:
                         auto_held += 1
                         auto_decisions.append({
-                            "candidate_id": result["candidate_id"],
-                            "eligible": False,
-                            "reasons": list(evaluation.reasons),
-                            "risk": evaluation.risk,
-                            "outcome": "held",
+                            **audit, "outcome": "held",
                         })
             except (MemoryConflict, MemoryNotFound, ValueError):
                 skipped += 1
@@ -550,6 +631,7 @@ class MemoryExtractionWorker:
             "auto_errors": auto_errors,
             "auto_decisions": auto_decisions,
             "auto_policy_version": "safe-auto-v1",
+            "judge_version": JUDGE_VERSION if mode == "safe_auto_judge" else None,
         })
 
     def _finish(self, job, status, result):
