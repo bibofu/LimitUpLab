@@ -20,6 +20,8 @@ def summarize_job_results(result_jsons: list[str]) -> dict:
     modes = Counter()
     outcomes = Counter()
     reasons = Counter()
+    judge_decisions = Counter()
+    judge_risks = Counter()
     policies = Counter()
     jobs = 0
     for raw in result_jsons:
@@ -40,6 +42,10 @@ def summarize_job_results(result_jsons: list[str]) -> dict:
                 outcomes[str(decision.get("outcome") or "unknown")] += 1
                 for reason in decision.get("reasons") or []:
                     reasons[str(reason)] += 1
+                if decision.get("judge_decision"):
+                    judge_decisions[str(decision["judge_decision"])] += 1
+                if decision.get("judge_risk"):
+                    judge_risks[str(decision["judge_risk"])] += 1
             continue
         # Older jobs predate auto_decisions; keep their aggregate counters useful.
         outcomes["activated"] += len(result.get("auto_activated_ids") or [])
@@ -51,6 +57,8 @@ def summarize_job_results(result_jsons: list[str]) -> dict:
         "policies": dict(sorted(policies.items())),
         "outcomes": dict(sorted(outcomes.items())),
         "reasons": dict(sorted(reasons.items())),
+        "judge_decisions": dict(sorted(judge_decisions.items())),
+        "judge_risks": dict(sorted(judge_risks.items())),
     }
 
 

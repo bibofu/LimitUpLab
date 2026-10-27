@@ -110,15 +110,17 @@
   - 激活来源写入 `activation_kind=manual|safe_auto` 和 `activation_reason`；
   - `safe_auto_shadow` 只记录本可自动激活的候选，不写 active，用于校准；
   - worker 的 `result_json.auto_decisions` 记录每个候选的 outcome、policy reasons 和 risk，不保存记忆正文；
-  - 影子/自动决策汇总：`python backend/scripts/report_memory_auto.py --days 7`；
+  - 影子/自动决策汇总：`python backend/scripts/report_memory_auto.py --days 7`，包含 judge_decisions / judge_risks；
   - 安全自动激活边界由 `tests/test_memory_auto_golden.py` 的固定用例覆盖；
   - live 校准：`python backend/scripts/evaluate_memory_auto.py --live`，输出 TP/TN/FP/FN 与逐案决策；
   - worker 命令：`python backend/scripts/run_memory_extraction.py --once`，或在本地启动脚本中自动拉起；
-  - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate|safe_auto_shadow|safe_auto|safe_auto_judge`；默认 `safe_auto`；
+  - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate|safe_auto_shadow|safe_auto|safe_auto_judge|safe_auto_judge_shadow`；默认 `safe_auto`；
   - `safe_auto_judge` 仅对通过结构安全检查、但因置信度或条件稳定性被拒绝的 scoped typed/display 候选调用 Judge；
   - Judge 只能输出 approve/hold/reject，必须 `approve + low risk` 才生效，错误或非法输出一律 hold；
   - Judge 不能覆盖结构、作用域、目标或删除边界；激活记录 `activation_kind=safe_auto`，`activation_reason` 带 `judge_auto` 前缀；
+  - `safe_auto_judge_shadow` 只运行 Judge 并记录批准/拒绝，不写 active；
   - `result_json.auto_decisions` 记录 judge decision、risk、reason 和版本；
+  - `judge_shadow_approved_ids` 单独记录影子批准候选；
 - 写入与删除：
   - 保留 owner revision、record revision、operation receipt、tombstone；
   - 删除清空正文、结构化字段、来源引用和 source quote，保留 scope/canonical identity、内容哈希和状态；
@@ -208,7 +210,7 @@ owner + active + 未过期 + 未删除
 
 ## 下一步
 
-1. 运行 shadow / judge shadow 校准，评估边界 Judge 的误放行率；
+1. 运行 `safe_auto_judge_shadow` 校准，评估边界 Judge 的误放行率；
 2. 增加后台候选运维接口；
 3. 接入 pgvector 混合检索与中文评测；
 4. `management_revision` 写入方；

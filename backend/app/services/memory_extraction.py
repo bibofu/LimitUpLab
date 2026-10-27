@@ -47,7 +47,7 @@ from app.services.llm_provider import (
 
 EXTRACTOR_VERSION = "memory-extractor-v2"
 AUTO_LEARN_ENV = "LIMITUPLAB_MEMORY_AUTO_LEARN"
-AUTO_LEARN_MODES = {"off", "candidate", "safe_auto", "safe_auto_shadow", "safe_auto_judge"}
+AUTO_LEARN_MODES = {"off", "candidate", "safe_auto", "safe_auto_shadow", "safe_auto_judge", "safe_auto_judge_shadow"}
 DEFAULT_AUTO_LEARN_MODE = "safe_auto"
 CANDIDATE_TTL_ENV = "LIMITUPLAB_MEMORY_CANDIDATE_TTL_DAYS"
 DEFAULT_CANDIDATE_TTL_DAYS = 30
@@ -490,6 +490,7 @@ class MemoryExtractionWorker:
         created, skipped = [], 0
         decisions = {"add": 0, "update": 0, "delete": 0, "refresh": 0, "noop": 0, "replay": 0}
         auto_activated, auto_shadow, auto_errors = [], [], []
+        auto_judge_shadow = []
         auto_decisions = []
         auto_held = 0
         for index, candidate in enumerate(candidates):
@@ -512,7 +513,10 @@ class MemoryExtractionWorker:
                     created.append(result["candidate_id"])
                 else:
                     skipped += 1
-                if mode in {"safe_auto", "safe_auto_shadow", "safe_auto_judge"} and result["candidate_id"]:
+                if mode in {
+                    "safe_auto", "safe_auto_shadow",
+                    "safe_auto_judge", "safe_auto_judge_shadow",
+                } and result["candidate_id"]:
                     evaluation = evaluate_safe_auto_candidate(
                         candidate,
                         key=write.key,
@@ -525,7 +529,7 @@ class MemoryExtractionWorker:
                         "risk": evaluation.risk,
                     }
                     if evaluation.eligible:
-                        if mode == "safe_auto_shadow":
+                        if mode in {"safe_auto_shadow", "safe_auto_judge_shadow"}:
                             auto_shadow.append(audit)
                             auto_decisions.append({**audit, "outcome": "shadow"})
                         else:
@@ -548,7 +552,7 @@ class MemoryExtractionWorker:
                                     **audit, "outcome": "error",
                                     "error": type(error).__name__,
                                 })
-                    elif mode == "safe_auto_judge":
+                    elif mode in {"safe_auto_judge", "safe_auto_judge_shadow"}:
                         judgeable, _ = judgeable_candidate(
                             candidate,
                             key=write.key,
@@ -582,29 +586,35 @@ class MemoryExtractionWorker:
                                 "judge_version": JUDGE_VERSION,
                             }
                             if verdict.decision == "approve" and verdict.risk == "low":
-                                try:
-                                    repository.confirm_candidate(
-                                        job["owner_id"], result["candidate_id"],
-                                        f"{job['job_id']}:judge:{index}",
-                                        activation_kind="safe_auto",
-                                        activation_reason=(
-                                            f"judge_auto:{JUDGE_VERSION}:{verdict.reason}"
-                                        ),
-                                    )
-                                    auto_activated.append(judge_audit)
+                                if mode == "safe_auto_judge_shadow":
+                                    auto_judge_shadow.append(judge_audit)
                                     auto_decisions.append({
-                                        **judge_audit, "outcome": "judge_activated",
+                                        **judge_audit, "outcome": "judge_shadow_approved",
                                     })
-                                    if result["candidate_id"] in created:
-                                        created.remove(result["candidate_id"])
-                                except (MemoryConflict, MemoryNotFound, ValueError) as error:
-                                    auto_errors.append({
-                                        **judge_audit, "error": type(error).__name__,
-                                    })
-                                    auto_decisions.append({
-                                        **judge_audit, "outcome": "error",
-                                        "error": type(error).__name__,
-                                    })
+                                else:
+                                    try:
+                                        repository.confirm_candidate(
+                                            job["owner_id"], result["candidate_id"],
+                                            f"{job['job_id']}:judge:{index}",
+                                            activation_kind="safe_auto",
+                                            activation_reason=(
+                                                f"judge_auto:{JUDGE_VERSION}:{verdict.reason}"
+                                            ),
+                                        )
+                                        auto_activated.append(judge_audit)
+                                        auto_decisions.append({
+                                            **judge_audit, "outcome": "judge_activated",
+                                        })
+                                        if result["candidate_id"] in created:
+                                            created.remove(result["candidate_id"])
+                                    except (MemoryConflict, MemoryNotFound, ValueError) as error:
+                                        auto_errors.append({
+                                            **judge_audit, "error": type(error).__name__,
+                                        })
+                                        auto_decisions.append({
+                                            **judge_audit, "outcome": "error",
+                                            "error": type(error).__name__,
+                                        })
                             else:
                                 auto_held += 1
                                 auto_decisions.append({
@@ -630,8 +640,15 @@ class MemoryExtractionWorker:
             "auto_held_count": auto_held,
             "auto_errors": auto_errors,
             "auto_decisions": auto_decisions,
+            "judge_shadow_approved_ids": [
+                item["candidate_id"] for item in auto_judge_shadow
+            ],
             "auto_policy_version": "safe-auto-v1",
-            "judge_version": JUDGE_VERSION if mode == "safe_auto_judge" else None,
+            "judge_version": (
+                JUDGE_VERSION
+                if mode in {"safe_auto_judge", "safe_auto_judge_shadow"}
+                else None
+            ),
         })
 
     def _finish(self, job, status, result):
