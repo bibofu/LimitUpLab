@@ -261,6 +261,7 @@ LimitUpLab/
     ├── V1.5_Milestone.md    # 当前阶段工作、验证、限制与下一步
     ├── V1.4_Milestone.md    # V1.4 历史发布边界与验证记录
     ├── LangChain_Integration.md # 当前 ReAct 架构说明
+    ├── Memory_Implementation.md # 短期/长期记忆实现细节
     └── code-quality-audit.md # 阶段性代码质量审查
 ```
 
