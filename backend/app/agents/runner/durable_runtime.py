@@ -158,8 +158,9 @@ def _agent(state, deps):
         if runner.request.trade_date:
             page["trade_date"] = runner.request.trade_date.isoformat()
         retrieved = _retrieve(deps.control, state["current_query"])
-        from app.services.memory_display import display_policies_for
+        from app.services.memory_display import display_answer_rule, display_policies_for
         display_policies = display_policies_for(retrieved.items, state["current_query"])
+        system_prompt = runner.system_prompt + display_answer_rule(display_policies)
         conversation = clean_conversation_for_memory_revision(state["conversation"], retrieved)
         working = sanitize_working_messages_for_memory_revision(
             state.get("messages", []), retrieved, state.get("memory_context_fingerprint"),
@@ -168,7 +169,7 @@ def _agent(state, deps):
         try:
             with trace_stage("context_preparation", {"node": "agent"}) as details:
                 built = build_context(
-                    system_prompt=runner.system_prompt, query=state["current_query"],
+                    system_prompt=system_prompt, query=state["current_query"],
                     conversation=conversation, working_messages=working, long_term_memory=retrieved,
                     page_context=page, tool_definitions=runner.definitions,
                     working_memory_dependencies=state.get("memory_dependencies"),

@@ -1,7 +1,11 @@
 """Deterministic tool display projections and their reference ordering."""
 
 from app.agents.structured_references import references_from_committed_result
-from app.services.memory_display import build_display_blocks, display_policies_for
+from app.services.memory_display import (
+    build_display_blocks,
+    display_answer_rule,
+    display_policies_for,
+)
 
 
 def memory_item(**changes):
@@ -41,6 +45,16 @@ def test_display_policy_projects_only_requested_columns_and_keeps_order():
     assert block["row_count"] == 2
     assert block["display_policy_id"] == "memory-display"
     assert block["missing_columns"] == []
+
+
+def test_display_answer_rule_prevents_row_duplication_without_extra_columns():
+    policies = display_policies_for([memory_item()], "展示最新的龙虎榜")
+    rule = display_answer_rule(policies)
+    assert "dragon_tiger_list" in rule
+    assert "name" in rule
+    assert "不要重复该表" in rule
+    assert "完整名单" in rule
+    assert display_answer_rule([]) == ""
 
 
 def test_current_field_request_overrides_long_term_display_policy():

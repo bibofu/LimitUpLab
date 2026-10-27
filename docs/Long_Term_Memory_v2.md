@@ -68,6 +68,7 @@
   - 服务端从完整工具 rows 生成 `display_blocks`，保留 `row_count`、`ordered_symbols`、缺失列和截断标记；
   - 前端确定性渲染展示块；
   - 展示块存在时，前端移除模型正文中的 Markdown 表格，避免同源表格重复；
+  - 回答 system prompt 会明确告知服务端将渲染哪些工具/列，并要求正文不要重复完整表格、完整行或同义逐行名单；用户本轮明确要求完整名单时仍以用户要求为准；
   - 当前问题明确要求其他字段时覆盖长期展示偏好；
   - 短期引用优先使用展示块的 `ordered_symbols`，而不是从模型正文猜顺序。
 - 后台候选学习（candidate / safe_auto 模式）：
@@ -137,7 +138,7 @@
 2. 自动激活覆盖 `tool_display`、全局封闭 typed，以及 tool/entity 作用域的 `response_style/output_format` 例外；condition 作用域和边界 Judge 尚未接入；scope hint 仍是词法推断，名称同义词不一定识别；
 3. 非自动候选没有前端入口，只能由运维 API 处理；TTL 已清理过期候选；
 4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
-5. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
+5. 展示块已移除 Markdown 表格并增加 prompt 去重约束，但模型正文中的列表或普通文字仍可能重复；尚未做硬性正文裁剪；
 6. 只有 `ordered_symbols` 唯一时才能用展示块解析“第二只”；重复股票的榜单仍不可按序号引用；
 7. 旧数据迁移到新表后的长期双读/回滚演练；
 8. 记忆评测集与自动激活校准。

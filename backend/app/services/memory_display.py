@@ -129,6 +129,23 @@ def display_policies_for(
     return list(policies.values())
 
 
+def display_answer_rule(policies: list[dict[str, Any]]) -> str:
+    """Tell the model not to duplicate rows the server will render itself."""
+
+    if not policies:
+        return ""
+    rendered = "；".join(
+        f"{policy['tool_name']}（{','.join(policy['columns'])}）"
+        for policy in policies
+    )
+    return (
+        "\n\n结构化展示已启用：服务端会确定性渲染"
+        f"{rendered} 的完整表格。最终正文不要重复该表、完整行或同义逐行名单；"
+        "只写结论、比较、差异、风险和缺失字段。"
+        "如果用户本轮明确要求其他字段、完整名单或不同格式，以用户当前要求为准。"
+    )
+
+
 def build_display_blocks(
     tool_messages: list[dict[str, Any]],
     policies: list[dict[str, Any]],
