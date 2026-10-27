@@ -94,7 +94,8 @@
   - `POST .../reject` 清空候选正文并标记 revoked；
   - `GET .../candidates` 列出待确认候选；
   - 前端不展示记忆候选、确认、忽略或管理入口；长期记忆只作为问答上下文使用；
-  - 非自动候选只通过 owner-scoped API 供后台/运维流程处理，不进入用户界面；
+  - 非自动候选只通过 owner-scoped API / 后台 CLI 供运维流程处理，不进入用户界面；
+  - 运维 CLI：`python backend/scripts/review_memory_candidates.py --owner <owner> list|confirm|reject`；
   - 未确认候选默认 TTL 30 天，可通过 `LIMITUPLAB_MEMORY_CANDIDATE_TTL_DAYS` 调整；
   - worker 每次运行先清理过期候选，清空正文并标记 expired；
   - 过期候选从 `GET /candidates` 隐藏，确认时清空 `candidate_expires_at`；
@@ -213,7 +214,7 @@ owner + active + 未过期 + 未删除
 ## 下一步
 
 1. 运行 `safe_auto_judge_shadow` 校准，评估边界 Judge 的误放行率；
-2. 增加后台候选运维接口；
+2. 后台候选运维的批量审计与权限边界；
 3. 接入 pgvector 混合检索与中文评测；
 4. `management_revision` 写入方；
 5. 抑制展示块与正文列表/文字的重复，并解析重复股票榜单的序号；
