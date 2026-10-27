@@ -149,6 +149,7 @@
   - candidate TTL 验收：候选写入 30 天 TTL，过期为 expired、正文清空、从候选 API 隐藏；确认后 active 的 `candidate_expires_at` 为空。
   - usage 验收：回答交付使用一条长期记忆后，`use_count=1`、`last_used_at` 写入、`management_revision` 增加，但内容 `revision` 不变。
   - 健康检查验收：本地库返回 `ok=true`、`critical_issues=0`，并报告 active/candidate 数量。
+  - 恢复演练验收（2026-10-27）：备份当前库到 `memory-restore-drill.dump`，用本地管理员角色恢复到临时数据库，`schema_current=true`，健康检查 `ok=true`、active=17、candidate=6，随后删除临时库；备份文件不提交。
   - safe_auto 校准验收：10 条 live 用例覆盖 tool/global/tool-exception/entity/topic/临时/delete/行情/交易/condition，结果为 TP=5、TN=5、FP=0、FN=0。
   - Judge 验收：真实 DeepSeek 对 `confidence=0.75` 的 condition 候选返回 `approve + low risk`；单元测试验证 Judge 只能复核 scoped 边界，全局 typed 和结构不合格候选不会进入 Judge。
 
@@ -162,7 +163,7 @@
 4. embedding 回填尚未接入；候选和使用统计已接入 `management_revision`；
 5. 展示块已移除 Markdown 表格并增加 prompt 去重约束，但模型正文中的列表或普通文字仍可能重复；尚未做硬性正文裁剪；
 6. 重复股票行已保留展示顺序并支持序号引用；但同一 symbol 的多个行无法区分具体是哪一条记录；
-7. 旧数据迁移到新表后的长期双读/回滚演练；
+7. 生产级双读/回滚演练；本地备份恢复演练已完成；
 8. 记忆评测集与自动激活校准。
 
 ## 当前数据字段
@@ -224,4 +225,4 @@ owner + active + 未过期 + 未删除
 2. 后台候选运维的批量审计与权限边界；
 3. 接入 pgvector 混合检索与中文评测；
 4. 展示块正文的硬性去重；
-5. 记忆评测集、自动激活校准和迁移演练。
+5. 记忆评测集、自动激活校准和生产级回滚演练。
