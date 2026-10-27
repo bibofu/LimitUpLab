@@ -122,19 +122,40 @@ def test_typed_auto_accepts_tool_exceptions_and_rejects_ambiguous_scopes():
         message=message, key="response_style",
         candidate_changes={**base, "structured": {"style": "concise"}},
     ).eligible
+    scoped_message = "以后分析财报时详细一点"
+    scoped_base = {
+        "content_text": "detailed",
+        "source_quote": scoped_message,
+    }
     assert evaluate(
-        message=message, key="response_style",
+        message=scoped_message, key="response_style",
         candidate_changes={
-            **base, "scope_type": "tool",
+            **base, **scoped_base, "scope_type": "tool",
             "scope": {"tool_name": "stock_financials"},
         },
     ).eligible
     assert evaluate(
-        message=message, key="response_style",
+        message=scoped_message, key="response_style",
         candidate_changes={
-            **base, "scope_type": "tool",
+            **base, **scoped_base, "scope_type": "tool",
             "scope": {"tool_name": "stock_financials"},
             "confidence": 0.85, "stability": "conditional_scope",
+        },
+    ).eligible
+    assert evaluate(
+        message="以后分析600519时详细一点", key="response_style",
+        candidate_changes={
+            **base, "content_text": "detailed", "scope_type": "entity",
+            "scope": {"symbol": "600519"},
+            "source_quote": "以后分析600519时详细一点",
+        },
+    ).eligible
+    assert not evaluate(
+        message="以后分析600519财报时详细一点", key="response_style",
+        candidate_changes={
+            **base, "content_text": "detailed", "scope_type": "entity",
+            "scope": {"symbol": "600519"},
+            "source_quote": "以后分析600519财报时详细一点",
         },
     ).eligible
     assert not evaluate(

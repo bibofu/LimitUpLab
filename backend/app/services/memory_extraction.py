@@ -29,6 +29,7 @@ from app.repositories.long_term_memory_repository import (
     MemoryConflict,
     MemoryNotFound,
 )
+from app.memory_terms import symbols_in_text, tools_in_text
 from app.services.memory_auto_policy import evaluate_safe_auto_candidate
 from app.services.llm_provider import (
     LLMProvider,
@@ -62,22 +63,6 @@ TYPED_FORMAT_VALUES = {
 TYPED_TOPIC_VALUES = {
     value: value for value in ("首板", "连板", "涨停", "炸板", "行业", "市场情绪")
 }
-TOOL_SCOPE_TERMS = {
-    "财报": "stock_financials", "财务": "stock_financials",
-    "k线": "stock_kline", "龙虎榜": "dragon_tiger_list",
-    "个股新闻": "stock_news", "新闻": "stock_news",
-    "公司资料": "stock_profile", "热股榜": "hot_stock_ranking",
-}
-
-
-def _tool_from_text(value: Any) -> str | None:
-    text = str(value or "").casefold()
-    for term, tool in TOOL_SCOPE_TERMS.items():
-        if term in text:
-            return tool
-    return None
-
-
 def _typed_value(value: Any, aliases: dict[str, str]) -> str | None:
     if value is None:
         return None
@@ -168,10 +153,14 @@ class MemoryCandidateDraft(BaseModel):
             self.canonical_key = "tool_display:" + TOOL_NAME_ALIASES.get(label, label)
         if self.candidate_action == "upsert" and self.scope_type == "condition":
             condition = str(self.scope.get("condition") or "").strip()
-            tool = _tool_from_text(condition) or _tool_from_text(self.source_quote)
-            if tool:
+            tools = tools_in_text(condition) | tools_in_text(self.source_quote)
+            symbols = symbols_in_text(condition) | symbols_in_text(self.source_quote)
+            if len(tools) == 1 and not symbols:
                 self.scope_type = "tool"
-                self.scope = {"tool_name": tool}
+                self.scope = {"tool_name": next(iter(tools))}
+            elif len(symbols) == 1 and not tools:
+                self.scope_type = "entity"
+                self.scope = {"symbol": next(iter(symbols))}
         tool_name = str(self.scope.get("tool_name") or "").strip()
         if self.scope_type == "tool" and not tool_name:
             raise ValueError("Tool candidate requires scope.tool_name")
@@ -473,8 +462,8 @@ class MemoryExtractionWorker:
                     or candidate.stability == "other"):
                 skipped += 1
                 continue
-            write = candidate_write(candidate, message=message, run_id=job["run_id"])
             try:
+                write = candidate_write(candidate, message=message, run_id=job["run_id"])
                 result = repository.consolidate_candidate(
                     job["owner_id"], write, f"{job['job_id']}:candidate:{index}",
                     action=candidate.candidate_action,

@@ -151,6 +151,20 @@ def test_model_typed_hints_are_normalized_to_closed_settings():
         "response_style", "tool", {"tool_name": "stock_financials"},
     )
 
+    entity_condition = MemoryCandidateDraft.model_validate({
+        **draft(),
+        "canonical_key": "preference.response_style",
+        "content_text": "detailed",
+        "scope_type": "condition",
+        "scope": {"condition": "分析600519时"},
+        "structured": {},
+        "source_quote": "以后分析600519时详细一点",
+    })
+    assert (entity_condition.canonical_key, entity_condition.scope_type,
+            entity_condition.scope) == (
+        "response_style", "entity", {"symbol": "600519"},
+    )
+
 
 def seed_job(owner=None, message=MESSAGE):
     user = owner or "visitor_" + uuid4().hex
@@ -428,6 +442,34 @@ def test_worker_safe_auto_activates_a_tool_scoped_typed_exception(
             WHERE owner_id=? AND from_memory_id=? AND to_memory_id=?""",
             (owner, scoped_active["memory_id"], global_setting.current.memory_id)).fetchone()
     assert relation["relation"] == "exception_to"
+
+
+def test_worker_safe_auto_activates_an_entity_scoped_typed_exception(
+    postgresql_database, monkeypatch,
+):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "safe_auto")
+    message = "以后分析600519时详细一点"
+    owner, _, _, _ = seed_job(message=message)
+    scoped = draft(
+        canonical_key="preference.response_style",
+        content_text="detailed",
+        scope_type="entity",
+        scope={"symbol": "600519"},
+        structured={},
+        source_quote=message,
+        confidence=0.9,
+        stability="explicit_future",
+    )
+    assert MemoryExtractionWorker(provider=CandidateProvider([scoped])).run_once(limit=1) == 1
+
+    repository = LongTermMemoryRepository()
+    active = repository.list_active(owner)
+    assert len(active) == 1
+    assert (active[0]["key"], active[0]["value"], active[0]["scope"]) == (
+        "response_style", "detailed", {"symbol": "600519"},
+    )
+    assert active[0]["activation_kind"] == "safe_auto"
+    assert repository.list_candidates(owner) == []
 
 
 def test_worker_safe_auto_shadow_records_eligibility_without_activation(

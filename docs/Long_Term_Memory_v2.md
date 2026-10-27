@@ -87,9 +87,9 @@
   - `safe_auto` 只自动激活低风险 ADD：
     - `tool_display:*`；
     - 全局封闭 typed 设置 `response_style` / `output_format` / `research_topic`；
-    - 工具作用域的 `response_style` / `output_format` 例外；
+    - 工具作用域和 entity（A 股代码）作用域的 `response_style` / `output_format` 例外；
     - 无 active/pending 目标；
-    - 默认 `confidence>=0.9` 且 `stability` 为明确未来/明确纠正；工具作用域 typed 例外允许 `conditional_scope` 且 `confidence>=0.85`；
+    - 默认 `confidence>=0.9` 且 `stability` 为明确未来/明确纠正；scoped typed 例外允许 `conditional_scope` 且 `confidence>=0.85`；
     - tool scope 与 key 一致；
     - `tool_display` 的 `structured` 只包含已知 `display_columns`；typed 设置 `structured` 必须为空；
     - `source_quote` 逐字出现在用户消息且包含持续表达；
@@ -112,7 +112,7 @@
   - 删除候选验收：对已有 `response_style` 生成 DELETE 候选，确认后目标与候选均进入 tombstone，active 列表为空；
   - 例外关系验收：global `response_style=concise` + tool `stock_financials` `response_style=detailed`，财报 scope 命中时只召回 detailed，并记录 `exception_to` 关系；
   - `safe_auto` 验收：真实 LLM 从“以后展示龙虎榜只显示股票名称”提取候选，在 `safe_auto` 模式下直接 active；`activation_kind=safe_auto`、候选队列为空、worker 结果记录自动激活 ID；
-  - typed 自动激活验收：模型输出的 `structured.style/display_format` 与 dotted key 被规范化为 `response_style/output_format` 封闭值；全局“回答简洁”和 scoped“分析财报时详细”均自动激活，后者写入 `stock_financials` 作用域及 `exception_to`（存在 global 时）。
+  - typed 自动激活验收：模型输出的 `structured.style/display_format` 与 dotted key 被规范化为 `response_style/output_format` 封闭值；全局“回答简洁”、tool-scoped“分析财报时详细”和 entity-scoped“分析600519时详细”均自动激活，scoped 版本分别写入 tool/symbol 作用域及 `exception_to`（存在 global 时）。
   - 运行时 scope 验收：真实 Graph 在“展示最新的龙虎榜”问题中把 scoped tool 记忆标记为 `scope_verified=true`，而不是只在单元测试中验证。
 
 ## 尚未落地
@@ -120,7 +120,7 @@
 以下能力明确未完成，不能对外宣称：
 
 1. pgvector 语义检索与同义改写召回；
-2. 自动激活覆盖 `tool_display`、全局封闭 typed，以及工具作用域的 `response_style/output_format` 例外；entity/condition 作用域和边界 Judge 尚未接入；scope hint 仍是词法推断，名称同义词不一定识别；
+2. 自动激活覆盖 `tool_display`、全局封闭 typed，以及 tool/entity 作用域的 `response_style/output_format` 例外；condition 作用域和边界 Judge 尚未接入；scope hint 仍是词法推断，名称同义词不一定识别；
 3. 非自动候选没有前端入口，也没有 TTL/清理任务；需要运维 API 处理；
 4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
 5. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
@@ -182,7 +182,7 @@ owner + active + 未过期 + 未删除
 
 ## 下一步
 
-1. 将安全自动激活扩展到 entity/condition scoped 例外；
+1. 将安全自动激活扩展到 condition scoped 例外；
 2. 增加非自动候选 TTL、清理任务和后台运维接口；
 3. 接入 pgvector 混合检索与中文评测；
 4. `management_revision` 写入方和边界 Judge LLM；

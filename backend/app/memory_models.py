@@ -27,7 +27,19 @@ def normalize_memory_scope(
 ) -> dict[str, JsonValue]:
     """Normalize common Chinese tool labels to canonical public tool ids."""
 
-    if scope_type != "tool" or not isinstance(scope, dict):
+    if not isinstance(scope, dict):
+        return scope
+    if scope_type == "entity":
+        symbol = (
+            scope.get("symbol")
+            or scope.get("entity_id")
+            or scope.get("stock_symbol")
+            or scope.get("code")
+        )
+        if symbol is not None and str(symbol).strip():
+            return {"symbol": str(symbol).strip()}
+        return scope
+    if scope_type != "tool":
         return scope
     normalized = dict(scope)
     tool = (

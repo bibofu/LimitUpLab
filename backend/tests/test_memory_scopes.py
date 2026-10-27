@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.memory_models import MemoryWrite
+from app.memory_models import MemoryWrite, memory_scope_key
 from app.repositories.long_term_memory_repository import LongTermMemoryRepository
 from app.services.memory_retrieval import retrieve_memories
 
@@ -134,3 +134,13 @@ def test_chinese_tool_aliases_are_normalized_to_public_tool_ids():
     write = free_text(key="tool_display:龙虎榜", scope={"tool": "龙虎榜"})
     assert write.key == "tool_display:dragon_tiger_list"
     assert write.scope == {"tool_name": "dragon_tiger_list"}
+
+
+def test_entity_scope_aliases_are_normalized_to_symbol():
+    write = free_text(
+        key="response_style", value="detailed", scope_type="entity",
+        scope={"entity_type": "stock", "entity_id": "600519"},
+        source_user_message="以后分析600519时详细一点",
+    )
+    assert write.scope == {"symbol": "600519"}
+    assert memory_scope_key(write.scope_type, write.scope) == 'entity:{"symbol":"600519"}'

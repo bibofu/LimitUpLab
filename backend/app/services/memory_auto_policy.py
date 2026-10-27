@@ -2,8 +2,9 @@
 
 The extractor proposes candidates. This module decides whether a candidate is
 safe enough to activate without a human review screen. It allows structured
-tool-display additions, closed global typed settings and tool-scoped typed
-exceptions; updates, deletes, free text and ambiguous scopes remain review work.
+tool-display additions, closed global typed settings, tool-scoped and entity-scoped typed
+exceptions; updates, deletes, free text and
+ambiguous scopes remain review work.
 """
 
 from __future__ import annotations
@@ -12,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from app.agents.memory_policy import FORBIDDEN_MEMORY_TERMS
+from app.memory_terms import is_a_share_symbol, symbols_in_text, tools_in_text
 from app.services.memory_display import COLUMN_LABELS, normalize_display_columns
 
 
@@ -40,10 +42,6 @@ TYPED_AUTO_VALUES = {
         "首板", "连板", "涨停", "炸板", "行业", "市场情绪",
     }),
 }
-TYPED_SCOPE_MARKERS = (
-    "财报", "财务", "K线", "k线", "龙虎榜", "个股新闻", "新闻",
-    "公司资料", "热股榜", "涨停池", "炸板池",
-)
 
 
 @dataclass(frozen=True)
@@ -140,10 +138,12 @@ def evaluate_safe_auto_candidate(
     allowed_values = TYPED_AUTO_VALUES.get((memory_type, key))
     if allowed_values is None:
         return _ineligible("unsupported_memory_identity")
+    message_tools = tools_in_text(message)
+    message_symbols = symbols_in_text(message)
     if scope_type == "global":
         if scope:
             return _ineligible("typed_setting_has_scope_object")
-        if any(marker in message for marker in TYPED_SCOPE_MARKERS):
+        if message_tools or message_symbols:
             return _ineligible("typed_setting_has_unmapped_scope")
         if confidence < MIN_AUTO_CONFIDENCE:
             return _ineligible("low_confidence_for_global_typed")
@@ -154,9 +154,20 @@ def evaluate_safe_auto_candidate(
         if not isinstance(scope, dict) or set(scope) != {"tool_name"}:
             return _ineligible("ambiguous_typed_exception_scope")
         tool = str(scope.get("tool_name") or "").strip()
-        if tool not in SAFE_AUTO_DISPLAY_TOOLS:
-            return _ineligible("unsupported_typed_exception_tool")
+        if message_symbols:
+            return _ineligible("typed_exception_mixes_tool_and_entity")
+        if tool not in SAFE_AUTO_DISPLAY_TOOLS or message_tools != {tool}:
+            return _ineligible("ambiguous_typed_exception_scope")
         scope_reason = f"typed_exception_add:{key}:{tool}"
+    elif scope_type == "entity" and key in {"response_style", "output_format"}:
+        if not isinstance(scope, dict) or set(scope) != {"symbol"}:
+            return _ineligible("ambiguous_typed_entity_scope")
+        symbol = str(scope.get("symbol") or "").strip()
+        if not is_a_share_symbol(symbol):
+            return _ineligible("unsupported_typed_entity_symbol")
+        if message_tools or message_symbols != {symbol}:
+            return _ineligible("ambiguous_typed_entity_scope")
+        scope_reason = f"typed_entity_exception_add:{key}:{symbol}"
     else:
         return _ineligible("unsupported_typed_scope")
     if not isinstance(structured, dict) or structured:
