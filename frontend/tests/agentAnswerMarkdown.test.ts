@@ -44,9 +44,9 @@ const table = [
   "| 2 | 000202 | 样例制造 | 上升 |",
 ].join("\n");
 
-function render(content: string) {
+function render(content: string, props: Record<string, unknown> = {}) {
   return renderToStaticMarkup(createElement(MemoryRouter, {},
-    createElement(AgentAnswerMarkdown, { content, stockMentions })));
+    createElement(AgentAnswerMarkdown, { content, stockMentions, ...props })));
 }
 
 function assertEvidenceTable(html: string) {
@@ -68,6 +68,21 @@ function assertEvidenceTable(html: string) {
 test("evidence tables render with separate prose and grounded stock links", () => {
   assertEvidenceTable(render([introduction, table, caveat].join("\n\n")));
 });
+
+test("lists made only of display row labels are removed while analytical lists remain", () => {
+  const labels = ["样例甲", "000001 样例甲", "样例乙", "000002 样例乙"];
+  assert.doesNotMatch(render(["- 样例甲", "- 样例乙"].join("\n"), {
+    duplicateListLabels: labels,
+  }), /<li/);
+  assert.doesNotMatch(render(["- 000001 样例甲", "- 000002 样例乙"].join("\n"), {
+    duplicateListLabels: labels,
+  }), /<li/);
+  const analytical = render(["- 样例甲：换手率偏高", "- 样例乙：成交额下降"].join("\n"), {
+    duplicateListLabels: labels,
+  });
+  assert.match(analytical, /<li/);
+});
+
 
 test("literal backslashes and Windows paths retain their meaning in prose and code", () => {
   const path = String.raw`C:\new\reports`;

@@ -114,6 +114,30 @@ function sessionErrorMessage(error: unknown, fallback: string): string {
   return `${fallback}，请稍后重试。`;
 }
 
+function displayDuplicateListLabels(blocks?: AgentDisplayBlock[]): string[] {
+  const labels = new Set<string>();
+  for (const block of blocks ?? []) {
+    for (const row of block.rows) {
+      const values = block.columns
+        .map(column => row[column])
+        .filter(value => value !== null && value !== undefined && value !== "");
+      const texts = values.map(value => String(value));
+      texts.forEach(value => labels.add(value));
+      if (texts.length > 1) labels.add(texts.join(" "));
+      const name = row.name === null || row.name === undefined ? "" : String(row.name);
+      const symbol = row.symbol === null || row.symbol === undefined ? "" : String(row.symbol);
+      if (name && symbol) {
+        labels.add(name);
+        labels.add(symbol);
+        labels.add(`${symbol} ${name}`);
+        labels.add(`${name} ${symbol}`);
+        labels.add(`${name}（${symbol}）`);
+      }
+    }
+  }
+  return [...labels];
+}
+
 function displayBlocksFromMetadata(value: unknown): AgentDisplayBlock[] {
   if (!Array.isArray(value)) return [];
   return value.filter((item): item is AgentDisplayBlock => {
@@ -899,6 +923,7 @@ export function AgentChatDock({
                     stockMentions={item.stockMentions}
                     animate={revealingMessageId === item.id}
                     suppressTables={Boolean(item.displayBlocks?.length)}
+                    duplicateListLabels={displayDuplicateListLabels(item.displayBlocks)}
                     onRevealProgress={followRevealedAnswer}
                   />
                   <AgentDisplayBlocks blocks={item.displayBlocks} />

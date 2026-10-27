@@ -42,6 +42,7 @@ export const AgentAnswerMarkdown = memo(function AgentAnswerMarkdown({
   stockMentions,
   animate = false,
   suppressTables = false,
+  duplicateListLabels = [],
   onRevealProgress,
   onRevealComplete,
 }: {
@@ -49,6 +50,7 @@ export const AgentAnswerMarkdown = memo(function AgentAnswerMarkdown({
   stockMentions: AgentStockMention[];
   animate?: boolean;
   suppressTables?: boolean;
+  duplicateListLabels?: string[];
   onRevealProgress?: () => void;
   onRevealComplete?: () => void;
 }) {
@@ -119,6 +121,9 @@ export const AgentAnswerMarkdown = memo(function AgentAnswerMarkdown({
       ]}
       rehypePlugins={[
         ...(suppressTables ? [rehypeSuppressTables] : []),
+        ...(duplicateListLabels.length
+          ? [[rehypeSuppressDuplicateLists, { labels: duplicateListLabels }] as any]
+          : []),
         [rehypeVerifiedReveal, { visibleUnits, plan }],
       ]}
     >
@@ -146,6 +151,40 @@ function stripTableNodes(parent: MarkdownNode) {
     child.type !== "table" && !(child.type === "element" && child.tagName === "table")
   ));
   parent.children.forEach(stripTableNodes);
+}
+
+/** Remove a list only when every item is a label already rendered by a display block. */
+function rehypeSuppressDuplicateLists({ labels }: { labels: string[] }) {
+  const normalized = new Set(labels.map(normalizeListLabel).filter(Boolean));
+  return (tree: MarkdownNode) => {
+    stripDuplicateLists(tree, normalized);
+  };
+}
+
+function normalizeListLabel(value: string) {
+  return value
+    .replace(/\s+/g, "")
+    .replace(/[（）()：:·,，、\-—_]/g, "")
+    .toLocaleLowerCase();
+}
+
+function nodeText(node: MarkdownNode): string {
+  if (node.value) return node.value;
+  return (node.children ?? []).map(nodeText).join("");
+}
+
+function stripDuplicateLists(parent: MarkdownNode, labels: Set<string>) {
+  if (!parent.children) return;
+  parent.children = parent.children.filter(child => {
+    if (child.type === "element" && (child.tagName === "ul" || child.tagName === "ol")) {
+      const items = (child.children ?? []).filter(item => item.type === "element" && item.tagName === "li");
+      if (items.length >= 2 && items.every(item => labels.has(normalizeListLabel(nodeText(item))))) {
+        return false;
+      }
+    }
+    return true;
+  });
+  parent.children.forEach(child => stripDuplicateLists(child, labels));
 }
 
 /** Parse the complete approved Markdown first, then reveal stable rendered nodes. */

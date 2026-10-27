@@ -75,6 +75,7 @@
   - 服务端从完整工具 rows 生成 `display_blocks`，保留 `row_count`、`ordered_symbols`、缺失列和截断标记；
   - 前端确定性渲染展示块；
   - 展示块存在时，前端移除模型正文中的 Markdown 表格，避免同源表格重复；
+  - 如果 Markdown 列表的每一项都只是展示块行标签（名称/代码/代码+名称），前端移除整个列表；含分析文字的列表保留；
   - 回答 system prompt 会明确告知服务端将渲染哪些工具/列，并要求正文不要重复完整表格、完整行或同义逐行名单；用户本轮明确要求完整名单时仍以用户要求为准；
   - 当前问题明确要求其他字段时覆盖长期展示偏好；
   - 短期引用优先使用展示块的 `ordered_symbols`，而不是从模型正文猜顺序；
@@ -146,6 +147,7 @@
   - 运行时 scope 验收：真实 Graph 在“展示最新的龙虎榜”问题中把 scoped tool 记忆标记为 `scope_verified=true`，而不是只在单元测试中验证；
   - 请求上下文验收：股票详情追问“它近期走势怎么样”时，使用请求 `symbol` 作为 entity scope 兜底；问题内出现其他代码时以问题代码为准。
   - 重复榜单验收：三行展示块包含重复 symbol 时，`ordered_symbols` 保留重复顺序，`ordinal_resolvable=true`，reference 类型为 `display_block`。
+  - 列表去重验收：纯名称/代码列表被移除，带“换手率/成交额”等分析文字的列表保留。
   - candidate TTL 验收：候选写入 30 天 TTL，过期为 expired、正文清空、从候选 API 隐藏；确认后 active 的 `candidate_expires_at` 为空。
   - usage 验收：回答交付使用一条长期记忆后，`use_count=1`、`last_used_at` 写入、`management_revision` 增加，但内容 `revision` 不变。
   - 健康检查验收：本地库返回 `ok=true`、`critical_issues=0`，并报告 active/candidate 数量。
@@ -161,7 +163,7 @@
 2. 自动激活覆盖 `tool_display`、全局封闭 typed，以及 tool/entity/精确 condition 作用域的 `response_style/output_format` 例外；`safe_auto_judge` 是可选边界复核；condition 仍不支持语义匹配；scope hint 仍是词法推断，名称同义词不一定识别；
 3. 非自动候选没有前端入口，只能由运维 API 处理；TTL 已清理过期候选；
 4. embedding 回填尚未接入；候选和使用统计已接入 `management_revision`；
-5. 展示块已移除 Markdown 表格并增加 prompt 去重约束，但模型正文中的列表或普通文字仍可能重复；尚未做硬性正文裁剪；
+5. 展示块已移除 Markdown 表格和纯行标签列表，并增加 prompt 去重约束；含分析文字的列表或普通文字仍可能重复；尚未做语义级正文裁剪；
 6. 重复股票行已保留展示顺序并支持序号引用；但同一 symbol 的多个行无法区分具体是哪一条记录；
 7. 生产级双读/回滚演练；本地备份恢复演练已完成；
 8. 记忆评测集与自动激活校准。
