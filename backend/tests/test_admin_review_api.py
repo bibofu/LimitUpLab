@@ -56,6 +56,11 @@ def test_admin_review_api_requires_key_and_supports_the_queue(
         assert drain.status_code == 200
         sample = client.post("/api/admin/review/sample?limit=1", headers=headers)
         assert sample.status_code == 200
+        recheck = client.post(
+            f"/api/admin/review/runs/{run_id}/recheck", headers=headers,
+        )
+        assert recheck.status_code == 200
+        assert recheck.json()["deterministic_jobs"] == 1
 
         missing = client.get("/api/admin/review/cases/case_missing", headers=headers)
         assert missing.status_code == 404

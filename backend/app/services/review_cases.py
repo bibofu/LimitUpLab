@@ -15,6 +15,7 @@ from app.review_models import (
     ReviewCaseEvent,
     ReviewCaseSummary,
     ReviewCaseUpdate,
+    ReviewDetectorReport,
     ReviewSignal,
 )
 from app.services.review_signals import severity_rank
@@ -252,10 +253,25 @@ class ReviewCaseService:
                 """,
                 (case_id,),
             ).fetchall()
+            report_rows = db.execute(
+                """
+                SELECT job_id, kind, detector_version, result_json, created_at
+                FROM answer_review_jobs
+                WHERE run_id = ? AND status = 'succeeded'
+                ORDER BY created_at
+                """,
+                (row["run_id"],),
+            ).fetchall() if row["run_id"] else []
+        reports = [
+            _report_from_row(item)
+            for item in report_rows
+            if _decode_object(item["result_json"]).get("report")
+        ]
         return _detail_from_row(
             row,
             [_signal_from_row(item) for item in signal_rows],
             [_event_from_row(item) for item in event_rows],
+            reports,
         )
 
     def update_case(
@@ -425,6 +441,7 @@ def _detail_from_row(
     row,
     signals: list[ReviewSignal],
     events: list[ReviewCaseEvent],
+    reports: list[ReviewDetectorReport],
 ) -> ReviewCaseDetail:
     return ReviewCaseDetail(
         **_summary_from_row(row).model_dump(),
@@ -440,6 +457,7 @@ def _detail_from_row(
         revision=int(row["revision"]),
         signals=signals,
         events=events,
+        reports=reports,
     )
 
 
@@ -470,6 +488,17 @@ def _event_from_row(row) -> ReviewCaseEvent:
         note=row["note"],
         actor=row["actor"],
         created_at=_datetime(row["created_at"]),
+    )
+
+
+def _report_from_row(row) -> ReviewDetectorReport:
+    report = _decode_object(row["result_json"]).get("report")
+    return ReviewDetectorReport(
+        job_id=row["job_id"],
+        kind=row["kind"],
+        detector_version=row["detector_version"],
+        created_at=_datetime(row["created_at"]),
+        report=report if isinstance(report, dict) else {},
     )
 
 

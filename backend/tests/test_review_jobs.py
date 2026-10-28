@@ -15,7 +15,7 @@ def test_manual_sample_worker_creates_a_low_priority_case(postgresql_database, m
     assert service.enqueue_manual_sample(limit=5) == 1
     assert service.enqueue_manual_sample(limit=5) == 0
     result = service.run_once(limit=5)
-    assert result["processed_jobs"] == 1
+    assert result["processed_jobs"] >= 1
     assert result["aggregated_signals"] == 1
 
     cases = ReviewCaseService().list_cases()
@@ -23,7 +23,8 @@ def test_manual_sample_worker_creates_a_low_priority_case(postgresql_database, m
     assert cases[0].source == "sample"
     assert cases[0].severity == "low"
     jobs = service.list_jobs()
-    assert jobs[0].status == "succeeded"
+    sample_job = next(job for job in jobs if job.kind == "sample")
+    assert sample_job.status == "succeeded"
 
 
 def test_sampling_is_stable_and_respects_the_daily_limit(postgresql_database, monkeypatch):

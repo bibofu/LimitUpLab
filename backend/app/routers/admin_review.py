@@ -16,6 +16,7 @@ from app.review_models import (
     ReviewFeedbackResponse,
     ReviewFeedbackRow,
     ReviewJobsResponse,
+    ReviewRecheckResponse,
     ReviewSampleResponse,
     ReviewSeverity,
     ReviewSource,
@@ -163,3 +164,17 @@ def sample_review_runs(
     return ReviewSampleResponse(
         enqueued=ReviewJobService().enqueue_manual_sample(limit=limit),
     )
+
+
+@router.post("/runs/{run_id}/recheck", response_model=ReviewRecheckResponse)
+def recheck_review_run(
+    run_id: str,
+    _admin: Annotated[None, Depends(require_admin_access)],
+) -> ReviewRecheckResponse:
+    """Queue fresh deterministic and enabled judge jobs for one run."""
+
+    try:
+        result = ReviewJobService().enqueue_recheck(run_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail="Run not found.") from None
+    return ReviewRecheckResponse(**result)

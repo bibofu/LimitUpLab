@@ -1,4 +1,4 @@
-"""Review sampling, job claiming and the background review worker."""
+"""Review sampling, detector jobs and the background review worker."""
 
 from __future__ import annotations
 
@@ -8,16 +8,25 @@ from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 from app.config import review_settings
 from app.database import begin_write, connect, initialize_database
 from app.review_models import ReviewJob
 from app.services.review_cases import ReviewCaseService
+from app.services.review_checks import CHECK_VERSION, run_deterministic_checks
+from app.services.review_judge import (
+    JUDGE_VERSION,
+    PROMPT_VERSION,
+    JudgeCallLedger,
+    JudgeUnavailable,
+    get_review_judge_provider,
+    run_judge,
+)
 from app.services.review_signals import ReviewSignalService
+from app.services.review_snapshot import load_run_snapshot
+from app.services.review_time import shanghai_day_start, shanghai_next_day_start
 
 
-SHANGHAI = ZoneInfo("Asia/Shanghai")
 JOB_LEASE_SECONDS = 120
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 30
@@ -25,6 +34,12 @@ SAMPLE_DETECTOR = "random_sample"
 SAMPLE_DETECTOR_VERSION = "sample-v1"
 SAMPLE_CONFIG_FINGERPRINT = "sample-lane-v1"
 SAMPLE_PRIORITY = 200
+DETERMINISTIC_CONFIG_FINGERPRINT = "deterministic-v1"
+DETERMINISTIC_PRIORITY = 100
+RECHECK_PRIORITY = 90
+JUDGE_CONFIG_FINGERPRINT = f"judge:{JUDGE_VERSION}:{PROMPT_VERSION}"
+JUDGE_PRIORITY = 50
+JUDGE_SAMPLE_PRIORITY = 150
 
 
 def sample_bucket(run_id: str, salt: str = "review-sample-v1") -> float:
@@ -41,6 +56,7 @@ class ReviewJobService:
         self.database_url = database_url
         self.cases = ReviewCaseService(database_url)
         self.signals = ReviewSignalService(database_url)
+        self.judge_ledger = JudgeCallLedger(database_url)
         self.worker_id = "review-worker-" + uuid4().hex[:12]
 
     def sample_recent_runs(self, *, limit: int = 200) -> int:
@@ -49,7 +65,7 @@ class ReviewJobService:
         settings = review_settings()
         if not settings.enabled or settings.sample_rate <= 0 or settings.sample_daily_limit <= 0:
             return 0
-        day_start = _shanghai_day_start()
+        day_start = shanghai_day_start()
         with closing(connect(self.database_url)) as db:
             initialize_database(db)
             begin_write(db)
@@ -122,13 +138,175 @@ class ReviewJobService:
             db.commit()
             return inserted
 
+    def enqueue_deterministic_recent(self, limit: int = 100) -> int:
+        """Queue contract checks for every completed answer in the last day."""
+
+        with closing(connect(self.database_url)) as db:
+            initialize_database(db)
+            begin_write(db)
+            candidates = db.execute(
+                """
+                SELECT run.run_id
+                FROM react_runs AS run
+                WHERE run.response_json IS NOT NULL
+                  AND run.started_at >= ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM answer_review_jobs AS job
+                      WHERE job.run_id = run.run_id
+                        AND job.kind='deterministic'
+                        AND job.config_fingerprint=?)
+                ORDER BY run.started_at DESC
+                LIMIT ?
+                """,
+                (
+                    (datetime.now(timezone.utc) - timedelta(hours=24)).isoformat(),
+                    DETERMINISTIC_CONFIG_FINGERPRINT,
+                    max(1, min(limit, 500)),
+                ),
+            ).fetchall()
+            inserted = 0
+            for candidate in candidates:
+                if self._insert_job(
+                    db, candidate["run_id"], "deterministic", DETERMINISTIC_PRIORITY,
+                    CHECK_VERSION, DETERMINISTIC_CONFIG_FINGERPRINT,
+                ):
+                    inserted += 1
+            db.commit()
+            return inserted
+
+    def enqueue_judge_candidates(self, limit: int = 50) -> int:
+        """Queue judge jobs for downvotes, risky statuses and sampled traffic."""
+
+        settings = review_settings()
+        if (
+            not settings.enabled
+            or not settings.judge_enabled
+            or settings.judge_daily_call_limit <= 0
+        ):
+            return 0
+        remaining = settings.judge_daily_call_limit - self.judge_ledger.calls_today()
+        if remaining <= 0:
+            return 0
+        now = datetime.now(timezone.utc)
+        with closing(connect(self.database_url)) as db:
+            initialize_database(db)
+            begin_write(db)
+            downvotes = db.execute(
+                """
+                SELECT DISTINCT run.run_id, run.started_at
+                FROM react_runs AS run
+                JOIN answer_review_signals AS signal
+                  ON signal.run_id = run.run_id AND signal.kind='downvote'
+                WHERE run.response_json IS NOT NULL
+                  AND run.started_at >= ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM answer_review_jobs AS job
+                      WHERE job.run_id = run.run_id AND job.kind='judge'
+                        AND job.config_fingerprint=?)
+                ORDER BY run.started_at DESC
+                LIMIT ?
+                """,
+                (
+                    (now - timedelta(days=7)).isoformat(),
+                    JUDGE_CONFIG_FINGERPRINT,
+                    max(1, min(limit, 200)),
+                ),
+            ).fetchall()
+            risky = db.execute(
+                """
+                SELECT run.run_id
+                FROM react_runs AS run
+                WHERE run.response_json IS NOT NULL
+                  AND run.started_at >= ?
+                  AND run.response_json::jsonb->>'task_status' IN ('partial','error')
+                  AND NOT EXISTS (
+                      SELECT 1 FROM answer_review_jobs AS job
+                      WHERE job.run_id = run.run_id AND job.kind='judge'
+                        AND job.config_fingerprint=?)
+                ORDER BY run.started_at DESC
+                LIMIT ?
+                """,
+                (
+                    (now - timedelta(hours=24)).isoformat(),
+                    JUDGE_CONFIG_FINGERPRINT,
+                    max(1, min(limit, 200)),
+                ),
+            ).fetchall()
+            normal = db.execute(
+                """
+                SELECT run.run_id
+                FROM react_runs AS run
+                WHERE run.response_json IS NOT NULL
+                  AND run.started_at >= ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM answer_review_jobs AS job
+                      WHERE job.run_id = run.run_id AND job.kind='judge'
+                        AND job.config_fingerprint=?)
+                ORDER BY run.started_at DESC
+                LIMIT ?
+                """,
+                (
+                    (now - timedelta(hours=24)).isoformat(),
+                    JUDGE_CONFIG_FINGERPRINT,
+                    max(1, min(limit, 500)),
+                ),
+            ).fetchall()
+            inserted = 0
+            for rows, priority, apply_rate in (
+                (downvotes, JUDGE_PRIORITY, False),
+                (risky, JUDGE_PRIORITY, False),
+                (normal, JUDGE_SAMPLE_PRIORITY, True),
+            ):
+                for candidate in rows:
+                    if inserted >= remaining:
+                        break
+                    if apply_rate and sample_bucket(
+                        candidate["run_id"], salt="review-judge-v1",
+                    ) >= settings.judge_sample_rate:
+                        continue
+                    if self._insert_job(
+                        db, candidate["run_id"], "judge", priority,
+                        JUDGE_VERSION, JUDGE_CONFIG_FINGERPRINT,
+                    ):
+                        inserted += 1
+            db.commit()
+            return inserted
+
+    def enqueue_recheck(self, run_id: str) -> dict[str, int]:
+        """Create fresh detector jobs for one run, ignoring prior reports."""
+
+        settings = review_settings()
+        with closing(connect(self.database_url)) as db:
+            initialize_database(db)
+            begin_write(db)
+            row = db.execute(
+                "SELECT response_json FROM react_runs WHERE run_id=?",
+                (run_id,),
+            ).fetchone()
+            if row is None or not row["response_json"]:
+                raise KeyError(run_id)
+            deterministic = self._insert_job(
+                db, run_id, "deterministic", RECHECK_PRIORITY, CHECK_VERSION,
+                f"{DETERMINISTIC_CONFIG_FINGERPRINT}:recheck:{uuid4().hex[:10]}",
+            )
+            judge = 0
+            if settings.judge_enabled:
+                judge = self._insert_job(
+                    db, run_id, "judge", RECHECK_PRIORITY, JUDGE_VERSION,
+                    f"{JUDGE_CONFIG_FINGERPRINT}:recheck:{uuid4().hex[:10]}",
+                )
+            db.commit()
+        return {"deterministic_jobs": int(deterministic), "judge_jobs": int(judge)}
+
     def run_once(self, *, limit: int = 10) -> dict[str, int]:
-        """Backfill signals, enqueue samples, process jobs and aggregate cases."""
+        """Backfill signals, enqueue detectors, process jobs and aggregate."""
 
         settings = review_settings()
         if not settings.enabled:
             return {"sampled_runs": 0, "processed_jobs": 0, "aggregated_signals": 0}
         self.signals.backfill_downvotes(limit=100)
+        self.enqueue_deterministic_recent()
+        self.enqueue_judge_candidates()
         sampled = self.sample_recent_runs()
         processed = 0
         for _ in range(max(1, min(limit, 50))):
@@ -170,20 +348,35 @@ class ReviewJobService:
         return [_job_from_row(row) for row in rows]
 
     def _insert_sample_job(self, db, run_id: str) -> bool:
+        return self._insert_job(
+            db, run_id, "sample", SAMPLE_PRIORITY,
+            SAMPLE_DETECTOR_VERSION, SAMPLE_CONFIG_FINGERPRINT,
+        )
+
+    def _insert_job(
+        self,
+        db,
+        run_id: str,
+        kind: str,
+        priority: int,
+        detector_version: str,
+        config_fingerprint: str,
+    ) -> bool:
         result = db.execute(
             """
             INSERT INTO answer_review_jobs (
                 job_id, run_id, kind, priority, detector_version, config_fingerprint
             )
-            VALUES (?, ?, 'sample', ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?)
             ON CONFLICT DO NOTHING
             """,
             (
                 "job_" + uuid4().hex,
                 run_id,
-                SAMPLE_PRIORITY,
-                SAMPLE_DETECTOR_VERSION,
-                SAMPLE_CONFIG_FINGERPRINT,
+                kind,
+                priority,
+                detector_version,
+                config_fingerprint,
             ),
         )
         return result.rowcount > 0
@@ -213,9 +406,16 @@ class ReviewJobService:
             return dict(row) if row else None
 
     def _process_job(self, job: dict[str, Any]) -> None:
-        if job["kind"] != "sample":
-            self._finish_job(job, "skipped", {"reason": "detector_not_implemented"})
-            return
+        if job["kind"] == "sample":
+            self._process_sample(job)
+        elif job["kind"] == "deterministic":
+            self._process_deterministic(job)
+        elif job["kind"] == "judge":
+            self._process_judge(job)
+        else:
+            self._finish_job(job, "skipped", {"reason": "unknown_job_kind"})
+
+    def _process_sample(self, job: dict[str, Any]) -> None:
         recorded = self.signals.record(
             run_id=job["run_id"],
             kind="sample",
@@ -227,6 +427,118 @@ class ReviewJobService:
             details={"job_id": job["job_id"]},
         )
         self._finish_job(job, "succeeded", {"signal_recorded": recorded})
+
+    def _process_deterministic(self, job: dict[str, Any]) -> None:
+        with closing(connect(self.database_url)) as db:
+            initialize_database(db)
+            snapshot = load_run_snapshot(db, job["run_id"])
+        if snapshot is None:
+            self._finish_job(job, "skipped", {"reason": "snapshot_missing"})
+            return
+        report = run_deterministic_checks(snapshot)
+        failures = report.failures()
+        if failures:
+            severity = "high" if any(
+                item.check in {"tool_evidence", "answer_present", "missing_data_disclosure"}
+                for item in failures
+            ) else "medium"
+            fingerprint = hashlib.sha256(json.dumps(
+                [{"check": item.check, "summary": item.summary} for item in failures],
+                ensure_ascii=False,
+            ).encode("utf-8")).hexdigest()[:16]
+            self.signals.record(
+                run_id=job["run_id"],
+                kind="deterministic",
+                severity=severity,
+                detector="deterministic",
+                detector_version=CHECK_VERSION,
+                source_ref="deterministic:" + fingerprint,
+                summary="确定性检查失败：" + "；".join(
+                    item.summary for item in failures
+                )[:400],
+                details={"checks": [item.as_dict() for item in failures]},
+            )
+        self._finish_job(job, "succeeded", {"report": report.as_dict()})
+
+    def _process_judge(self, job: dict[str, Any]) -> None:
+        settings = review_settings()
+        provider = get_review_judge_provider()
+        if provider is None:
+            self._finish_job(job, "skipped", {"reason": "judge_disabled"})
+            return
+        last_error: Exception | None = None
+        for _ in range(settings.judge_max_calls_per_job):
+            if self.judge_ledger.calls_today() >= settings.judge_daily_call_limit:
+                self._defer_job(job, "judge_daily_call_limit")
+                return
+            with closing(connect(self.database_url)) as db:
+                initialize_database(db)
+                snapshot = load_run_snapshot(db, job["run_id"])
+            if snapshot is None:
+                self._finish_job(job, "skipped", {"reason": "snapshot_missing"})
+                return
+            try:
+                outcome = run_judge(
+                    provider, snapshot,
+                    max_input_chars=settings.judge_max_input_chars,
+                )
+            except JudgeUnavailable as error:
+                last_error = error
+                self.judge_ledger.record(
+                    job_id=job["job_id"],
+                    run_id=job["run_id"],
+                    status="error",
+                    error_type=type(error).__name__,
+                )
+                continue
+            self.judge_ledger.record(
+                job_id=job["job_id"],
+                run_id=job["run_id"],
+                status="succeeded",
+                outcome=outcome,
+            )
+            report = outcome.report
+            result = {
+                "report": {
+                    "detector": "judge",
+                    "version": JUDGE_VERSION,
+                    "prompt_version": PROMPT_VERSION,
+                    "overall": report.overall,
+                    "dimensions": [item.model_dump() for item in report.dimensions],
+                    "notes": report.notes,
+                },
+            }
+            if report.overall == "fail":
+                failed = [item for item in report.dimensions if item.verdict == "fail"]
+                severity = "high" if any(
+                    item.dimension in {"factual_grounding", "compliance"}
+                    for item in failed
+                ) else "medium"
+                fingerprint = hashlib.sha256(json.dumps(
+                    [{"dimension": item.dimension, "reason": item.reason} for item in failed],
+                    ensure_ascii=False,
+                ).encode("utf-8")).hexdigest()[:16]
+                self.signals.record(
+                    run_id=job["run_id"],
+                    kind="judge",
+                    severity=severity,
+                    detector="judge",
+                    detector_version=JUDGE_VERSION,
+                    source_ref="judge:" + fingerprint,
+                    summary="模型评审失败：" + "；".join(
+                        f"{item.dimension}: {item.reason}" for item in failed
+                    )[:400],
+                    details=result["report"],
+                )
+            self._finish_job(job, "succeeded", result)
+            return
+        if self.judge_ledger.calls_today() >= settings.judge_daily_call_limit:
+            self._defer_job(job, "judge_daily_call_limit")
+            return
+        self._finish_job(
+            job, "failed",
+            {"error": type(last_error).__name__ if last_error else "judge_unavailable"},
+        )
 
     def _finish_job(self, job: dict[str, Any], status: str, result: dict[str, Any]) -> None:
         with closing(connect(self.database_url)) as db:
@@ -240,6 +552,25 @@ class ReviewJobService:
                 WHERE job_id=?
                 """,
                 (status, json.dumps(result, ensure_ascii=False), job["job_id"]),
+            )
+            db.commit()
+
+    def _defer_job(self, job: dict[str, Any], reason: str) -> None:
+        with closing(connect(self.database_url)) as db:
+            initialize_database(db)
+            begin_write(db)
+            db.execute(
+                """
+                UPDATE answer_review_jobs
+                SET status='pending', available_at=?, result_json=?,
+                    error_message=NULL, locked_by=NULL, locked_until=NULL
+                WHERE job_id=?
+                """,
+                (
+                    shanghai_next_day_start().isoformat(),
+                    json.dumps({"deferred": reason}, ensure_ascii=False),
+                    job["job_id"],
+                ),
             )
             db.commit()
 
@@ -262,11 +593,6 @@ class ReviewJobService:
                 db.commit()
             return
         self._finish_job(job, "failed", {"error": type(error).__name__})
-
-
-def _shanghai_day_start() -> datetime:
-    now = datetime.now(SHANGHAI)
-    return now.replace(hour=0, minute=0, second=0, microsecond=0).astimezone(timezone.utc)
 
 
 def _job_from_row(row) -> ReviewJob:
