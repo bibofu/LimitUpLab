@@ -101,4 +101,9 @@ app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
 app.include_router(tool_results.router, prefix="/api/agents", tags=["agents"])
 app.include_router(memories.router, prefix="/api/agents", tags=["memories"])
 app.include_router(admin_review.router, prefix="/api/admin/review", tags=["admin-review"])
+app.include_router(
+    admin_review.observability_router,
+    prefix="/api/admin/observability",
+    tags=["admin-review"],
+)
 app.include_router(consolidation.router, prefix="/api/strategies", tags=["strategies"])

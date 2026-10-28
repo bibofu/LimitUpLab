@@ -7,6 +7,7 @@ from typing import Annotated, Literal
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 
+from app.observability_models import ObservabilitySummary
 from app.repositories import AnswerFeedbackRepository
 from app.review_models import (
     ReviewBulkDismissRequest,
@@ -33,10 +34,22 @@ from app.services.review_cases import (
     ReviewCaseValidationError,
 )
 from app.services.review_jobs import ReviewJobService
+from app.services.observability import ObservabilityService
 
 
 router = APIRouter()
+observability_router = APIRouter()
 JobStatus = Literal["pending", "processing", "succeeded", "skipped", "failed", "deferred"]
+
+
+@observability_router.get("/summary", response_model=ObservabilitySummary)
+def get_observability_summary(
+    _admin: Annotated[None, Depends(require_admin_access)],
+    days: int = Query(default=7, ge=1, le=90),
+) -> ObservabilitySummary:
+    """Return traffic, feedback, review and judge totals by Shanghai day."""
+
+    return ObservabilityService().summary(days=days)
 
 
 @router.get("/cases", response_model=ReviewCasesResponse)
