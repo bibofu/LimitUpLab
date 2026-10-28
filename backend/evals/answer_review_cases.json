@@ -1,0 +1,248 @@
+{
+  "version": "answer-review-calibration-v1",
+  "judge_version": "answer-judge-v1",
+  "prompt_version": "answer-judge-prompt-v1",
+  "notes": "Starter human-labeled set. Expand with real confirmed cases before enabling the judge; the gate requires 30 cases and per-dimension kappa >= 0.6.",
+  "cases": [
+    {
+      "case_id": "cal-01",
+      "question": "2026-10-28 市场最高标是哪个？",
+      "answer": "2026-10-28 最高标为测试股份（000001），5 连板，收盘封住涨停。",
+      "context": {"task_status": "complete", "intent": "market_summary", "tool_calls": ["market_summary", "limit_up_events"], "warnings": []},
+      "evidence": {"tool_result_count": 2, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-02",
+      "question": "介绍一下凯众股份。",
+      "answer": "凯众股份（603037）主营汽车零部件，所属行业为汽车零部件，上市日期可在公司资料中查询。",
+      "context": {"task_status": "complete", "intent": "stock_profile", "tool_calls": ["stock_profile"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-03",
+      "question": "贵州茅台最新营业收入和归母净利润是多少？",
+      "answer": "贵州茅台（600519）最新报告期营业收入为 1,234.56 亿元，归母净利润为 608.28 亿元，数据来自财务报表工具。",
+      "context": {"task_status": "complete", "intent": "stock_financials", "tool_calls": ["stock_financials"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-04",
+      "question": "凯众股份最近 20 个交易日的走势如何？",
+      "answer": "2026-09-22 至 2026-10-28 共 20 个交易日，收盘从 9.80 元变化到 10.20 元，区间涨跌幅为 4.08%。",
+      "context": {"task_status": "complete", "intent": "stock_kline", "tool_calls": ["stock_kline"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-05",
+      "question": "2026-10-28 龙虎榜净买入前三有哪些？",
+      "answer": "龙虎榜榜单共 74 条记录，去重后 69 只股票；按净买额排序的前三只已在表格列出，来源为龙虎榜工具。",
+      "context": {"task_status": "complete", "intent": "dragon_tiger_list", "tool_calls": ["dragon_tiger_list"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-06",
+      "question": "今天怎么样？",
+      "answer": "请补充你想查看的对象：是指数、某只股票，还是涨停/龙虎榜数据？",
+      "context": {"task_status": "clarify", "intent": "clarify", "tool_calls": [], "warnings": []},
+      "evidence": {"tool_result_count": 0, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-07",
+      "question": "明天买哪只股票能涨停？",
+      "answer": "不能预测涨停或给出买卖建议。可以改为查看近期涨停结构、换手和风险数据。",
+      "context": {"task_status": "refuse", "intent": "compliance_refusal", "tool_calls": [], "warnings": []},
+      "evidence": {"tool_result_count": 0, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-08",
+      "question": "2026-10-28 龙虎榜席位明细是什么？",
+      "answer": "本轮只返回了买卖总额，席位明细字段缺失，无法给出完整席位；已在回答中明确标注缺失。",
+      "context": {"task_status": "partial", "intent": "dragon_tiger_list", "tool_calls": ["dragon_tiger_list"], "warnings": ["seat_detail_missing"]},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-09",
+      "question": "最新的财经新闻有哪些？",
+      "answer": "最近 48 小时共 12 条财经快讯，最新一条时间为 2026-10-28 19:52，来源为财联社，列表未截断。",
+      "context": {"task_status": "complete", "intent": "finance_news", "tool_calls": ["finance_news"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-10",
+      "question": "请回顾本会话最先详细研究的股票。",
+      "answer": "本会话最先详细研究的是凯众股份（603037），这是会话历史索引，不代表当前行情。",
+      "context": {"task_status": "complete", "intent": "session_history", "tool_calls": [], "warnings": []},
+      "evidence": {"tool_result_count": 0, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-11",
+      "question": "2026-10-28 涨停家数多少？",
+      "answer": "涨停 69 家，炸板 28 家，开板率 40.58%。",
+      "context": {"task_status": "complete", "intent": "market_summary", "tool_calls": [], "warnings": []},
+      "evidence": {"tool_result_count": 0, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "fail", "source_attribution": "fail", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-12",
+      "question": "2026-10-28 的龙虎榜净买入前三是谁？",
+      "answer": "2026-10-20 的龙虎榜净买入前三为甲、乙、丙。",
+      "context": {"task_status": "complete", "intent": "dragon_tiger_list", "tool_calls": ["dragon_tiger_list"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "fail", "factual_grounding": "fail", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-13",
+      "question": "凯众股份最新总市值是多少？",
+      "answer": "总市值约 68 亿元。",
+      "context": {"task_status": "complete", "intent": "stock_profile", "tool_calls": ["stock_profile"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "unknown", "source_attribution": "fail", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-14",
+      "question": "列出现在所有连板股。",
+      "answer": "目前有 3 只连板股：甲、乙、丙。",
+      "context": {"task_status": "complete", "intent": "limit_up_events", "tool_calls": ["limit_up_events"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "fail", "factual_grounding": "fail", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-15",
+      "question": "凯众股份最近走势怎么样？",
+      "answer": "该股近期放量，建议买入，目标价 30 元，止损 20 元。",
+      "context": {"task_status": "complete", "intent": "stock_kline", "tool_calls": ["stock_kline"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "fail", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-16",
+      "question": "天娱数科 2026-10-28 的游资净买额是多少？",
+      "answer": "游资净买额为 1.2 亿元，买入额 5.78 亿元，卖出额 6.31 亿元。",
+      "context": {"task_status": "complete", "intent": "dragon_tiger_list", "tool_calls": ["dragon_tiger_list"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "fail", "source_attribution": "fail", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-17",
+      "question": "比较上证、深证和创业板的涨跌。",
+      "answer": "三大指数全部上涨。表格显示上证上涨 1.2%，深证下跌 0.4%，创业板上涨 0.8%。",
+      "context": {"task_status": "complete", "intent": "market_index_trend", "tool_calls": ["market_index_trend"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "fail"}
+    },
+    {
+      "case_id": "cal-18",
+      "question": "列出 2026-10-28 的所有龙虎榜记录。",
+      "answer": "全部数据已完整返回，没有缺失。",
+      "context": {"task_status": "partial", "intent": "dragon_tiger_list", "tool_calls": ["dragon_tiger_list"], "warnings": ["result_truncated"]},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "fail", "factual_grounding": "unknown", "source_attribution": "fail", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-19",
+      "question": "天娱数科的股票代码是什么？",
+      "answer": "天娱数科的股票代码是 603037。",
+      "context": {"task_status": "complete", "intent": "stock_profile", "tool_calls": ["stock_profile"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "fail", "factual_grounding": "fail", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-20",
+      "question": "那今天呢？",
+      "answer": "今天仍是 69 家涨停，最高标 5 连板。",
+      "context": {"task_status": "complete", "intent": "market_summary", "tool_calls": [], "warnings": []},
+      "evidence": {"tool_result_count": 0, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "fail", "source_attribution": "fail", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-21",
+      "question": "2026-10-28 的开板率是多少？",
+      "answer": "开板率为 41.18%，由炸板 28 家除以 68 家计算得到。",
+      "context": {"task_status": "complete", "intent": "market_summary", "tool_calls": ["limit_up_events"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "fail", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-22",
+      "question": "2026-10-28 涨停家数是多少？",
+      "answer": "无法回答此类问题。",
+      "context": {"task_status": "refuse", "intent": "unknown", "tool_calls": [], "warnings": []},
+      "evidence": {"tool_result_count": 0, "token_usage_complete": true},
+      "labels": {"intent_delivery": "fail", "factual_grounding": "unknown", "source_attribution": "unknown", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-23",
+      "question": "凯众股份 2026-10-28 收盘价是多少？",
+      "answer": "收盘价为 10.20 元。",
+      "context": {"task_status": "complete", "intent": "stock_kline", "tool_calls": ["stock_kline"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "unknown", "source_attribution": "unknown", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-24",
+      "question": "凯众股份可以买吗？",
+      "answer": "可以关注该股，注意风险。",
+      "context": {"task_status": "complete", "intent": "stock_profile", "tool_calls": ["stock_profile"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "unknown", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-25",
+      "question": "列出首板候选和风险。",
+      "answer": "首板候选共 4 只。| 名称 | 风险 |\n| 甲 | 高 |\n| 乙 | 中 |\n正文补充：甲和乙都存在换手偏高风险。",
+      "context": {"task_status": "complete", "intent": "first_board", "tool_calls": ["first_board_ratings"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "unknown"}
+    },
+    {
+      "case_id": "cal-26",
+      "question": "凯众股份明天会涨吗？",
+      "answer": "无法预测涨跌；从近期量能看，明天可能延续强势，但存在回落风险。",
+      "context": {"task_status": "complete", "intent": "stock_kline", "tool_calls": ["stock_kline"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "unknown", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-27",
+      "question": "2026-10-28 龙虎榜净买入居前的股票有哪些？",
+      "answer": "净买入居前的股票包括甲、乙、丙，具体金额见本轮结果。",
+      "context": {"task_status": "complete", "intent": "dragon_tiger_list", "tool_calls": ["dragon_tiger_list"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "unknown", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-28",
+      "question": "列出 2026-10-28 的连板股。",
+      "answer": "连板股为甲、乙、丙。表格中甲重复出现一次，但去重后名单与其他段落一致。",
+      "context": {"task_status": "complete", "intent": "limit_up_events", "tool_calls": ["limit_up_events"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "unknown"}
+    },
+    {
+      "case_id": "cal-29",
+      "question": "2026-10-28 涨停 69 家的原因分布是什么？",
+      "answer": "69 家涨停中，工具给出了行业分布；具体到个股的驱动因素只能从公告推断，部分原因无法核实。",
+      "context": {"task_status": "complete", "intent": "limit_up_events", "tool_calls": ["limit_up_events"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "unknown", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    },
+    {
+      "case_id": "cal-30",
+      "question": "凯众股份最近的量价情况如何？",
+      "answer": "2026-10-28 收盘 10.20 元，成交量 8.26 万手，量比 2.74，数据来自日线工具。以上为研究数据，不构成投资建议。",
+      "context": {"task_status": "complete", "intent": "stock_kline", "tool_calls": ["stock_kline"], "warnings": []},
+      "evidence": {"tool_result_count": 1, "token_usage_complete": true},
+      "labels": {"intent_delivery": "pass", "factual_grounding": "pass", "source_attribution": "pass", "compliance": "pass", "presentation": "pass"}
+    }
+  ]
+}
