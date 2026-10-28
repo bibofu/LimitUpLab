@@ -46,6 +46,7 @@ class _FakeClient:
         self.fail_observation = False
         self.flushed = False
         self.shutdown_called = False
+        self.scores: list[dict] = []
 
     def create_trace_id(self, seed=None):
         return f"trace-{seed}"
@@ -60,6 +61,10 @@ class _FakeClient:
 
     def get_trace_url(self, trace_id=None):
         return f"https://example.test/trace/{trace_id}"
+
+    def create_score(self, **kwargs):
+        self.scores.append(kwargs)
+        return {"id": "score-1", **kwargs}
 
     def flush(self):
         self.flushed = True
@@ -235,6 +240,22 @@ class AgentTracingTest(unittest.TestCase):
         self.assertTrue(client.shutdown_called)
 
     # Regression scenario: credential-shaped keys and values never reach export.
+    def test_feedback_score_mirrors_vote_and_fails_open(self) -> None:
+        client = _FakeClient()
+        tracer = LangfuseTracer(
+            ACTIVE_SETTINGS, client=client, propagate=_FakePropagate(),
+        )
+        self.assertTrue(tracer.feedback_score(
+            run_id="run-1", vote="down",
+            reasons=["data_error"], comment="日期不对",
+        ))
+        self.assertEqual(client.scores[0]["trace_id"], "trace-run-1")
+        self.assertEqual(client.scores[0]["value"], 0.0)
+        self.assertIn("data_error", client.scores[0]["comment"])
+        client.create_score = lambda **_: (_ for _ in ()).throw(RuntimeError("offline"))
+        self.assertFalse(tracer.feedback_score(run_id="run-1", vote="up"))
+        self.assertFalse(NullTracer().feedback_score(run_id="run-1", vote="up"))
+
     def test_mask_trace_data_redacts_credentials(self) -> None:
         masked = mask_trace_data(data={
             "api_key": "sk-live-1234567890",

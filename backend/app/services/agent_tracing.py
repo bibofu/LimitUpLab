@@ -180,6 +180,15 @@ class AgentTracer(Protocol):
 
     def stage(self, *, name: str, metadata: dict[str, Any] | None = None) -> Iterator[GenerationSpan]: ...
 
+    def feedback_score(
+        self,
+        *,
+        run_id: str,
+        vote: str,
+        reasons: list[str] | None = None,
+        comment: str = "",
+    ) -> bool: ...
+
     def flush(self) -> None: ...
 
     def shutdown(self) -> None: ...
@@ -260,6 +269,16 @@ class NullTracer:
     @contextmanager
     def stage(self, *, name: str, metadata: dict[str, Any] | None = None):
         yield _NullGeneration()
+
+    def feedback_score(
+        self,
+        *,
+        run_id: str,
+        vote: str,
+        reasons: list[str] | None = None,
+        comment: str = "",
+    ) -> bool:
+        return False
 
     def flush(self) -> None:
         return None
@@ -497,6 +516,31 @@ class LangfuseTracer:
             except BaseException as error:
                 handle.finish(error=error)
                 raise
+
+    def feedback_score(
+        self,
+        *,
+        run_id: str,
+        vote: str,
+        reasons: list[str] | None = None,
+        comment: str = "",
+    ) -> bool:
+        """Mirror one product vote as a Langfuse score; failures stay local."""
+
+        try:
+            trace_id = self._client.create_trace_id(seed=run_id)
+            labels = ",".join(reasons or [])
+            text = " ".join(part for part in (labels, comment) if part).strip()
+            self._client.create_score(
+                trace_id=trace_id,
+                name="answer_feedback",
+                value=1.0 if vote == "up" else 0.0,
+                comment=text[:500] or None,
+            )
+            return True
+        except Exception as error:
+            _trace_failure("score.feedback", error)
+            return False
 
     def flush(self) -> None:
         try:

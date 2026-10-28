@@ -90,6 +90,7 @@ from app.services.scoring_policy_optimizer import (
     build_scoring_policy_registry,
     optimize_scoring_policy,
 )
+from app.services.agent_tracing import get_agent_tracer
 from app.services.system_health import build_agent_system_health
 from app.services.review_signals import ReviewSignalService
 from app.security import current_owner_id, require_admin_access
@@ -555,6 +556,20 @@ def save_answer_feedback(
             logger.warning(
                 "review_downvote_signal_failed error_type=%s", type(error).__name__,
             )
+    try:
+        tracer = get_agent_tracer()
+        recorder = getattr(tracer, "feedback_score", None)
+        if callable(recorder):
+            recorder(
+                run_id=run_id,
+                vote=feedback.vote,
+                reasons=list(payload.reasons),
+                comment=payload.comment,
+            )
+    except Exception as error:  # noqa: BLE001 - tracing must never fail the vote
+        logger.warning(
+            "review_feedback_score_failed error_type=%s", type(error).__name__,
+        )
     return AnswerFeedbackResponse(feedback=feedback)
 
 
