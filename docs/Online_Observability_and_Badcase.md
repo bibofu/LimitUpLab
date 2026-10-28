@@ -141,6 +141,14 @@ Judge 成本账本。记录模型、协议版本、prompt/completion/total token
 
 LLM Judge 使用盲评输入：用户问题、有限上下文、正式回答、工具调用摘要与结果、版本信息。不输入点赞、人工结论或确定性结果。输出五个正交维度的 `pass/fail/unknown`，不给总分；`fail` 必须引用服务端可校验的证据 ID，引用无效时降级为 `unknown`。Judge 默认关闭，只有在人工标注集上逐维 Cohen's kappa 达到 0.6 后才启用。
 
+校准集位于 `backend/evals/answer_review_cases.json`，脚本为：
+
+```powershell
+backend\.venv\Scripts\python.exe backend\scripts\evaluate_answer_review.py
+```
+
+输出包含逐维一致率、kappa、缺失预测和启用门槛；当前 30 条是启动集，需持续补入真实确认案例。Judge 调用的 token、模型、耗时和估算成本逐次写入 `answer_review_judge_calls`，日调用上限在调用前检查，耗尽时任务延期到下一个上海日。
+
 ## 人工审核流程
 
 状态：
