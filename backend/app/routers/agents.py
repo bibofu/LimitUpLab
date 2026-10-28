@@ -27,6 +27,9 @@ from app.models import (
     AgentUsageAdminResponse,
     AgentUsageRecord,
     AgentToolTrace,
+    AnswerFeedbackInput,
+    AnswerFeedbackResponse,
+    AnswerFeedbackSummary,
     ChatSessionCreateRequest,
     ChatSessionDetail,
     ChatSessionsResponse,
@@ -49,8 +52,11 @@ from app.repositories import (
     AgentCacheRepository,
     AgentRunRepository,
     AgentUsageRepository,
+    AnswerFeedbackRepository,
     ChatSessionRepository,
     DailyPipelineRepository,
+    FeedbackTargetIncomplete,
+    FeedbackTargetNotFound,
     FirstBoardRepository,
     ReviewSnapshotRepository,
     RecommendationIntelligenceRepository,
@@ -479,6 +485,80 @@ def get_agent_usage(
         concurrency=agent_rate_limiter.snapshot(),
         generated_by="agent-usage-accounting-v1",
     )
+
+
+@router.get("/feedback/summary", response_model=AnswerFeedbackSummary)
+def get_answer_feedback_summary(
+    _admin: Annotated[None, Depends(require_admin_access)],
+    days: int = Query(default=7, ge=1, le=90),
+) -> AnswerFeedbackSummary:
+    """Return protected vote ratio, coverage and reason totals."""
+
+    return AnswerFeedbackRepository().summary(days=days)
+
+
+@router.get(
+    "/chat/runs/{run_id}/feedback",
+    response_model=AnswerFeedbackResponse,
+)
+def get_answer_feedback(
+    run_id: str,
+    owner_id: Annotated[str, Depends(current_owner_id)],
+) -> AnswerFeedbackResponse:
+    """Return the caller's current verdict for one completed answer."""
+
+    try:
+        feedback = AnswerFeedbackRepository().get(run_id, owner_id)
+    except FeedbackTargetNotFound:
+        raise HTTPException(status_code=404, detail="Run not found.") from None
+    except FeedbackTargetIncomplete:
+        raise HTTPException(
+            status_code=409,
+            detail="Feedback requires a completed answer.",
+        ) from None
+    return AnswerFeedbackResponse(feedback=feedback)
+
+
+@router.put(
+    "/chat/runs/{run_id}/feedback",
+    response_model=AnswerFeedbackResponse,
+)
+def save_answer_feedback(
+    run_id: str,
+    payload: AnswerFeedbackInput,
+    owner_id: Annotated[str, Depends(current_owner_id)],
+) -> AnswerFeedbackResponse:
+    """Create or replace the caller's verdict for one completed answer."""
+
+    try:
+        feedback = AnswerFeedbackRepository().save(run_id, owner_id, payload)
+    except FeedbackTargetNotFound:
+        raise HTTPException(status_code=404, detail="Run not found.") from None
+    except FeedbackTargetIncomplete:
+        raise HTTPException(
+            status_code=409,
+            detail="Feedback requires a completed answer.",
+        ) from None
+    return AnswerFeedbackResponse(feedback=feedback)
+
+
+@router.delete("/chat/runs/{run_id}/feedback")
+def delete_answer_feedback(
+    run_id: str,
+    owner_id: Annotated[str, Depends(current_owner_id)],
+) -> dict[str, bool]:
+    """Retract the caller's verdict without deleting the answer."""
+
+    try:
+        deleted = AnswerFeedbackRepository().delete(run_id, owner_id)
+    except FeedbackTargetNotFound:
+        raise HTTPException(status_code=404, detail="Run not found.") from None
+    except FeedbackTargetIncomplete:
+        raise HTTPException(
+            status_code=409,
+            detail="Feedback requires a completed answer.",
+        ) from None
+    return {"deleted": deleted}
 
 
 @router.get("/daily-pipeline-status", response_model=DailyPipelineStatusResponse)

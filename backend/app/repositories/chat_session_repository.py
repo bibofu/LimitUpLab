@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from uuid import uuid4
 
 from app.database import begin_write, connect, initialize_database, table_exists
+from app.repositories.answer_feedback_repository import feedback_record_from_row
 from app.repositories.storage_sql import insertion_order
 from app.models import (
     AgentToolTrace,
@@ -184,11 +185,30 @@ class ChatSessionRepository:
                 """,
                 (session_id, max(1, min(message_limit, 200))),
             ).fetchall()
+            run_ids = [item["run_id"] for item in message_rows if item["run_id"]]
+            feedback_by_run = {}
+            if run_ids:
+                placeholders = ",".join("?" for _ in run_ids)
+                feedback_rows = connection.execute(
+                    f"""
+                    SELECT *
+                    FROM answer_feedback
+                    WHERE owner_id = ? AND run_id IN ({placeholders})
+                    """,
+                    (owner_id, *run_ids),
+                ).fetchall()
+                feedback_by_run = {
+                    item["run_id"]: feedback_record_from_row(item)
+                    for item in feedback_rows
+                }
         finally:
             connection.close()
         return ChatSessionDetail(
             **_session_summary_from_row(row).model_dump(),
-            messages=[_message_from_row(item) for item in message_rows],
+            messages=[
+                _message_from_row(item, feedback_by_run.get(item["run_id"]))
+                for item in message_rows
+            ],
         )
 
     def append_message(
@@ -379,7 +399,7 @@ def _session_summary_from_row(row: Record) -> ChatSessionSummary:
 
 
 # Deserialize a stored chat message and its metadata.
-def _message_from_row(row: Record) -> ChatSessionMessage:
+def _message_from_row(row: Record, feedback=None) -> ChatSessionMessage:
     metadata = json.loads(row["metadata_json"] or "{}")
     if (
         row["role"] == "assistant"
@@ -405,5 +425,6 @@ def _message_from_row(row: Record) -> ChatSessionMessage:
         status=row["status"],
         run_id=row["run_id"],
         metadata=metadata,
+        feedback=feedback,
         created_at=datetime.fromisoformat(row["created_at"]),
     )

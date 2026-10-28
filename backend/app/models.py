@@ -2,7 +2,7 @@ from datetime import date, datetime, time
 from math import isfinite
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agent_output_sanitizer import sanitize_agent_answer
 from app.review_digest_models import ReviewDigest
@@ -1555,6 +1555,65 @@ class DailyReviewSnapshotsResponse(BaseModel):
     generated_by: str
 
 
+FeedbackReason = Literal[
+    "data_error",
+    "wrong_scope",
+    "missing_source",
+    "incomplete",
+    "display",
+    "other",
+]
+
+
+class AnswerFeedbackInput(BaseModel):
+    """One owner's verdict on a completed Agent answer."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    vote: Literal["up", "down"]
+    reasons: list[FeedbackReason] = Field(default_factory=list, max_length=5)
+    comment: str = Field(default="", max_length=1000)
+
+
+class AnswerFeedbackRecord(BaseModel):
+    """Stored verdict returned to its owner and to the review workspace."""
+
+    run_id: str
+    vote: Literal["up", "down"]
+    reasons: list[FeedbackReason] = Field(default_factory=list)
+    comment: str = ""
+    created_at: datetime
+    updated_at: datetime
+
+
+class AnswerFeedbackResponse(BaseModel):
+    """Current feedback for one answer, or null when the owner has not voted."""
+
+    feedback: AnswerFeedbackRecord | None = None
+
+
+class AnswerFeedbackReasonCount(BaseModel):
+    """Aggregated count for one downvote reason label."""
+
+    reason: str
+    count: int
+
+
+class AnswerFeedbackSummary(BaseModel):
+    """Administrator-facing feedback ratio for one accounting period."""
+
+    days: int
+    period_started_at: datetime
+    up_count: int
+    down_count: int
+    vote_count: int
+    answered_count: int
+    like_ratio: float | None = None
+    feedback_coverage: float | None = None
+    down_per_100_answers: float | None = None
+    reasons: list[AnswerFeedbackReasonCount] = Field(default_factory=list)
+
+
 class ChatSessionMessage(BaseModel):
     """Persisted user or assistant message inside one chat session."""
 
@@ -1565,6 +1624,7 @@ class ChatSessionMessage(BaseModel):
     status: Literal["success", "error"] = "success"
     run_id: str | None = None
     metadata: dict[str, Any] = Field(default_factory=dict)
+    feedback: AnswerFeedbackRecord | None = None
     created_at: datetime
 
 

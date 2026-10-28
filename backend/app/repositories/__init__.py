@@ -1,6 +1,11 @@
 from app.repositories.agent_cache_repository import AgentCacheRepository
 from app.repositories.agent_run_repository import AgentRunRepository
 from app.repositories.agent_usage_repository import AgentUsageRepository
+from app.repositories.answer_feedback_repository import (
+    AnswerFeedbackRepository,
+    FeedbackTargetIncomplete,
+    FeedbackTargetNotFound,
+)
 from app.repositories.chat_session_repository import (
     ChatSessionRepository,
     SessionOwnershipError,
@@ -25,8 +30,11 @@ __all__ = [
     "AgentCacheRepository",
     "AgentRunRepository",
     "AgentUsageRepository",
+    "AnswerFeedbackRepository",
     "ChatSessionRepository",
     "ChatMemoryRepository",
+    "FeedbackTargetIncomplete",
+    "FeedbackTargetNotFound",
     "SessionOwnershipError",
     "DailyPipelineRepository",
     "FirstBoardRepository",
