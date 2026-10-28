@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 
 import {
+  bulkDismissReviewCases,
   drainReviewJobs,
   exportReviewCase,
   fetchReviewCase,
@@ -69,6 +70,8 @@ export function AdminReviewPage() {
   const [feedback, setFeedback] = useState<ReviewFeedbackRow[]>([]);
   const [jobs, setJobs] = useState<ReviewJob[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedCaseIds, setSelectedCaseIds] = useState<string[]>([]);
+  const [bulkNote, setBulkNote] = useState("");
   const [detail, setDetail] = useState<ReviewCaseDetail | null>(null);
   const [form, setForm] = useState<ReviewCaseForm | null>(null);
   const [note, setNote] = useState("");
@@ -223,6 +226,32 @@ export function AdminReviewPage() {
     }
   }
 
+  async function dismissSelected() {
+    if (!selectedCaseIds.length || !bulkNote.trim()) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await bulkDismissReviewCases(
+        adminKey, selectedCaseIds, bulkNote.trim(),
+      );
+      setNotice(`已驳回 ${result.dismissed} 个案例，跳过 ${result.skipped} 个非待复核案例`);
+      setSelectedCaseIds([]);
+      setBulkNote("");
+      await loadWorkspace(adminKey);
+    } catch (caught) {
+      setError(reviewErrorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  function toggleCase(caseId: string) {
+    setSelectedCaseIds(current => current.includes(caseId)
+      ? current.filter(item => item !== caseId)
+      : [...current, caseId]);
+  }
+
   async function recheckCurrent() {
     if (!detail?.run_id) return;
     setBusy(true);
@@ -352,9 +381,40 @@ export function AdminReviewPage() {
             {loading && cases.length === 0 ? <p className="admin-review-empty">加载中…</p> : null}
             {!loading && cases.length === 0 ? <p className="admin-review-empty">暂无案例</p> : null}
             {cases.length > 0 ? (
+              <div className="admin-review-bulk">
+                <label>
+                  <input
+                    type="checkbox"
+                    checked={cases.every(item => selectedCaseIds.includes(item.case_id))}
+                    onChange={() => setSelectedCaseIds(
+                      cases.every(item => selectedCaseIds.includes(item.case_id))
+                        ? []
+                        : cases.map(item => item.case_id),
+                    )}
+                  />
+                  全选
+                </label>
+                <span className="admin-review-muted">已选 {selectedCaseIds.length} 个</span>
+                <input
+                  value={bulkNote}
+                  maxLength={2000}
+                  placeholder="批量驳回说明（必填）"
+                  onChange={event => setBulkNote(event.target.value)}
+                />
+                <button
+                  type="button"
+                  disabled={busy || !selectedCaseIds.length || !bulkNote.trim()}
+                  onClick={() => void dismissSelected()}
+                >
+                  批量驳回
+                </button>
+              </div>
+            ) : null}
+            {cases.length > 0 ? (
               <table className="admin-review-table">
                 <thead>
                   <tr>
+                    <th aria-label="选择" />
                     <th>状态</th>
                     <th>问题</th>
                     <th>来源</th>
@@ -366,6 +426,14 @@ export function AdminReviewPage() {
                 <tbody>
                   {cases.map(item => (
                     <tr key={item.case_id} className={item.case_id === selectedId ? "selected" : ""}>
+                      <td>
+                        <input
+                          type="checkbox"
+                          aria-label={`选择案例 ${item.case_id}`}
+                          checked={selectedCaseIds.includes(item.case_id)}
+                          onChange={() => toggleCase(item.case_id)}
+                        />
+                      </td>
                       <td>
                         <span className={`admin-review-badge status-${item.status}`}>
                           {reviewStatusLabel(item.status)}

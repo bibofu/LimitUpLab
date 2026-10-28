@@ -6,6 +6,7 @@ import type { ConsolidationPool } from "./consolidation";
 import type { AnswerFeedbackPayload } from "./utils/answerFeedback";
 import type {
   ReviewCaseDetail,
+  ReviewBulkDismissResponse,
   ReviewCaseUpdate,
   ReviewCasesResponse,
   ReviewDrainResponse,
@@ -468,6 +469,22 @@ export function updateReviewCase(
       headers: { ...adminHeaders(adminKey), "Content-Type": "application/json" },
       body: JSON.stringify(update),
     },
+  );
+}
+
+export function bulkDismissReviewCases(
+  adminKey: string,
+  caseIds: string[],
+  note: string,
+) {
+  return request<ReviewBulkDismissResponse>(
+    "/api/admin/review/cases/bulk-dismiss",
+    {
+      method: "POST",
+      headers: { ...adminHeaders(adminKey), "Content-Type": "application/json" },
+      body: JSON.stringify({ case_ids: caseIds, note }),
+    },
+    60_000,
   );
 }
 

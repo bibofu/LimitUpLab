@@ -161,6 +161,50 @@
   font-size: 13px;
 }
 
+.admin-review-bulk {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  font-size: 12px;
+}
+
+.admin-review-bulk label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #6b7280;
+}
+
+.admin-review-bulk input[type="text"],
+.admin-review-bulk input:not([type]) {
+  flex: 1;
+  min-width: 180px;
+  padding: 6px 8px;
+  border: 1px solid #dbe2ea;
+  border-radius: 5px;
+  color: #374151;
+  font: inherit;
+  font-size: 12px;
+}
+
+.admin-review-bulk button {
+  padding: 6px 10px;
+  border: 1px solid #f1c7c2;
+  border-radius: 5px;
+  background: #fdf3f2;
+  color: #b42318;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.admin-review-bulk button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
 .admin-review-form textarea {
   resize: vertical;
 }

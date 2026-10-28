@@ -166,3 +166,8 @@ export interface ReviewRecheckResponse {
   deterministic_jobs: number;
   judge_jobs: number;
 }
+
+export interface ReviewBulkDismissResponse {
+  dismissed: number;
+  skipped: number;
+}
