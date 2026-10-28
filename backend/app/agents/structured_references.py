@@ -24,6 +24,7 @@ ANALYSIS_TOOLS = frozenset({
     "daily_board_promotion", "market_summary", "sector_performance",
     "sector_stock_ranking", "hot_stock_ranking", "dragon_tiger_list",
     "recent_limit_up_returns", "post_limit_statistics", "market_event_pool",
+    "stock_kline", "market_index_trend",
 })
 
 

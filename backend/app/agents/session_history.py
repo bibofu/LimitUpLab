@@ -105,6 +105,7 @@ def build_session_ledger(history: list[Any] | None) -> list[dict[str, Any]]:
                 "tools": [],
                 "stocks": [],
                 "answer_excerpt": "",
+                "_question_stocks": _stocks({}, str(content or "")),
             }
             turns.append(current)
         elif role == "assistant" and current is not None:
@@ -112,8 +113,10 @@ def build_session_ledger(history: list[Any] | None) -> list[dict[str, Any]]:
             current["answer_status"] = meta.get("task_status") or _value(item, "status", "success")
             current["stop_reason"] = meta.get("stop_reason")
             current["tools"] = _tool_names(meta)
-            current["stocks"] = _stocks(meta, str(content or ""))
+            current["stocks"] = _stocks(meta, str(content or "")) or current["_question_stocks"]
             current["answer_excerpt"] = _text(content, MAX_ANSWER_CHARS)
+    for turn in turns:
+        turn.pop("_question_stocks", None)
     return turns[-MAX_LEDGER_TURNS:]
 
 
@@ -158,7 +161,9 @@ def build_session_facts(ledger: list[dict[str, Any]] | None) -> dict[str, Any]:
             first_date = _date_from_text(question)
         if "market_index_trend" in tools:
             compared_indices = list(_INDEX_NAMES)
-        if ("龙虎榜" in question or "上榜" in question or "席位" in question) and len(stocks) == 1:
+        if (not is_session_recap_query(question)
+                and ("上榜" in question or "席位" in question)
+                and len(stocks) == 1):
             dragon_tiger_followup = stocks[0]
     return {
         "first_detailed_stock": _named_stock(ledger or [], first_detailed),

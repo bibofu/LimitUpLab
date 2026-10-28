@@ -284,3 +284,40 @@ def test_multiple_analysis_scopes_with_different_dates_still_clarify():
         referents=refs,
     )
     assert resolved["status"] == "clarify"
+
+
+def test_stock_kline_and_index_trend_can_back_analysis_followups():
+    refs = build_conversation_referents("run-1", response(
+        "凯众股份 K 线", [kline()],
+    ))
+    assert refs["analysis"]["tool"] == "stock_kline"
+    resolved = resolve_reference(
+        "你上一答的 K 线数据是否矛盾？", [],
+        intent={"kind": "analysis", "quote": "你上一答"},
+        referents=refs,
+    )
+    assert resolved["status"] == "resolved"
+    assert resolved["tool"] == "stock_kline"
+
+    index = {"name": "market_index_trend", "status": "success", "output": {
+        "name": "market_index_trend", "status": "ok",
+        "data_as_of": "2026-10-27",
+        "rows": [{"name": "上证指数", "symbol": "000001.SH",
+                  "start_date": "2026-10-21", "end_date": "2026-10-27",
+                  "start_close": 3713.03, "end_close": 3648.3,
+                  "return_pct": -1.74, "positive_days": 2, "negative_days": 2}],
+        "query_scope": {"scope_version": 1, "tool": "market_index_trend",
+                        "arguments": {"days": 5, "end_date": "2026-10-27"},
+                        "explicit_arguments": {"days": 5, "end_date": "2026-10-27"}},
+    }}
+    refs = build_conversation_referents("run-2", response(
+        "上证指数 5 日走势", [index], run_id="run-2",
+    ))
+    assert refs["analysis"]["tool"] == "market_index_trend"
+    resolved = resolve_reference(
+        "同一时间窗口比较三个指数", [],
+        intent={"kind": "analysis", "quote": "同一时间窗口"},
+        referents=refs,
+    )
+    assert resolved["status"] == "resolved"
+    assert resolved["tool"] == "market_index_trend"

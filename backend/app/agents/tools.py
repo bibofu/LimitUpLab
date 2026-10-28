@@ -1319,6 +1319,24 @@ class AgentToolRegistry:
         )
         matched_count = len(target_events)
         unique_stock_count = len({event.symbol for event in target_events})
+        event_summary = None
+        if len(selected_dates) == 1:
+            closed_count = sum(1 for event in target_events if event.closed_limit)
+            opened_count = sum(1 for event in target_events if event.break_count > 0)
+            unsealed_count = matched_count - closed_count
+            event_summary = {
+                "trade_date": selected_dates[0].isoformat(),
+                "touched_count": matched_count,
+                "closed_count": closed_count,
+                "opened_count": opened_count,
+                "unsealed_count": unsealed_count,
+                "opened_rate": opened_count / matched_count if matched_count else None,
+                "unsealed_rate": unsealed_count / matched_count if matched_count else None,
+                "rate_basis": (
+                    "single-day unique stock rows; opened_count / touched_count; "
+                    "unsealed_count / touched_count"
+                ),
+            }
         sector_summary, unclassified_event_count = group_limit_up_events(
             target_events, group_by=group_by, limit=limit,
         )
@@ -1351,6 +1369,7 @@ class AgentToolRegistry:
             "matched_count": matched_count,
             "unique_stock_count": unique_stock_count,
             "returned_count": len(target_events),
+            "event_summary": event_summary,
             "sector_summary": sector_summary,
             "unclassified_event_count": unclassified_event_count,
             "events": [

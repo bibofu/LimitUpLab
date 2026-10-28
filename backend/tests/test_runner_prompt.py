@@ -100,3 +100,10 @@ def test_prompt_distinguishes_null_fields_and_requires_row_consistency():
     assert "字段值为 null 表示字段存在但值缺失" in prompt
     assert "摘要视图未显示某字段不等于原始行没有该字段" in prompt
     assert "不得写成“均为……”。" in prompt
+
+
+def test_prompt_requires_market_summary_for_opening_and_unsealed_rates():
+    prompt = system_prompt(V1_TOOLS)
+    assert "开板率、炸板未回封率优先引用 market_summary" in prompt
+    assert "event_summary" in prompt
+    assert "touched_count 已包含收盘未回封" in prompt

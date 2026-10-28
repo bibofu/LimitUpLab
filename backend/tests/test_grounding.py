@@ -86,3 +86,22 @@ def test_memory_command_is_not_blocked_by_market_terms():
 
 def test_non_data_clarification_is_allowed():
     assert missing_required_tool("什么是K线？", [], "complete") is False
+
+
+def test_rate_question_requires_market_summary():
+    query = "2026-10-27 的开板率与炸板未回封率分别是多少？请给出分子、分母。"
+    assert required_tool_for_query(query) == "market_summary"
+    assert _result(query, answer="41/97 ≈ 42.3%").stop_reason == "tool_evidence_required"
+    assert _result(query, ["market_summary"], answer="56/69 ≈ 81.16%").status == "complete"
+
+
+def test_event_window_question_does_not_require_stock_kline():
+    query = "凯众股份603037截至2026年10月27日最近二十个交易日出现过哪些涨停或炸板记录？"
+    assert required_tool_for_query(query) is None
+    assert _result(query, answer="没有记录。").status == "complete"
+
+
+def test_unavailable_rate_answer_with_dates_is_not_treated_as_a_numeric_claim():
+    query = "沿用刚才这一天，开板率与炸板未回封率分别是多少？"
+    answer = "2026-10-28 15:22 的数据尚未落定，分子和分母都缺，无法计算。"
+    assert _result(query, answer=answer).status == "complete"

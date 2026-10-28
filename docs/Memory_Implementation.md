@@ -294,13 +294,13 @@ model_rounds, tool_count, remaining_seconds, done
   - 用户问题，截断到 300 字；
   - assistant 交付状态、stop_reason；
   - 工具名（排除 `read_tool_result`）；
-  - 股票 `symbol/name`；
+  - 股票 `symbol/name`；assistant metadata 没有股票时回退到用户问题中的 6 位代码；
   - assistant 回答摘要，截断到 240 字。
 - `session_facts`：程序从 ledger 计算的确定性事实：
   - `first_detailed_stock`：第一次调用 `stock_profile/stock_kline/stock_financials/stock_news/stock_activity` 且带股票实体的轮次；
   - `first_explicit_date`：用户问题中第一次出现的 ISO 或中文日期；
   - `compared_indices`：调用过 `market_index_trend` 时固定为上证指数、深证成指、创业板指；
-  - `dragon_tiger_followup_stock`：问题包含“龙虎榜/上榜/席位”且该轮只有一个股票实体时的股票。
+  - `dragon_tiger_followup_stock`：问题包含“上榜/席位”、该轮只有一个股票实体，且问题本身不是会话回顾时取该股票；这避免“回顾本会话的龙虎榜追问”反向覆盖真实对象。
 
 这两项只通过 context payload 提供给模型，不是市场证据。对于能由 `session_facts` 完整回答的回顾问题，`_agent` 直接返回确定性回顾文本，不再让模型从摘要猜测；回答末尾明确标注“会话对象索引，不是本轮行情证据”。
 
@@ -361,17 +361,22 @@ Token 估算：
 实现位置：`app/agents/grounding.py`，在 `result_from_state` 交付前执行。
 
 - `required_tool_for_query` 对明显的数据问题要求特定工具：
-  - K 线、收盘价、成交量、均线、量比、回撤、20 日窗口 → `stock_kline`；
+  - 开板率、炸板未回封率、未回封率、触板股 → `market_summary`；历史日期市场综述不可用时，`limit_up_events.event_summary` 提供同一单日口径；
+  - K 线、收盘价、成交量、均线、量比、回撤、价格与成交量 → `stock_kline`；
   - 龙虎榜、上榜、席位、买入额、卖出额、净买额、机构/游资净买 → `dragon_tiger_list`；
   - 上证指数、深证成指、创业板指、三大指数 → `market_index_trend`。
 - 只有同时满足以下条件才阻止发布：
   - 问题命中上述工具；
   - 本轮 `tool_calls` 不包含该工具；
-  - 回答包含数字（避免误伤纯定性回答）；
+  - 回答在剔除日期和时间后仍含数字（避免把“2026-10-28 数据未落定”误判成数值主张）；
   - 状态不是 `clarify/refuse/cancelled/error`；
   - 不是显式记忆命令，也不是会话回顾问题。
 - 阻止时返回 `partial/tool_evidence_required`，明确说明“需要本轮工具结果，未发布旧数据”，不自动复用上一轮或摘要中的数字。
 - 这是 fail-closed 守卫，不会自动重试工具；用户重新提问后，模型应调用工具再回答。
+- `limit_up_events` 单日查询新增 `event_summary`：
+  - `touched_count`、`closed_count`、`opened_count`、`unsealed_count`；
+  - `opened_rate`、`unsealed_rate`；
+  - 在 limit 截断前基于全部匹配事件计算，避免把 `closed_count` 当分母或重复加 broken board。
 - system prompt 同时要求：
   - 字段值为 `null` 不等于字段不存在；
   - 只有 `field_definitions` 不存在该字段时才能说工具不提供；
@@ -392,6 +397,7 @@ Token 估算：
 - 无法唯一确定时返回 `clarify`，不猜测股票、顺序或日期。
 - Markdown 表格是明确的展示顺序：`_displayed_order` 优先使用表格块，忽略同时出现的、仅作说明的 bullet 列表；这保证“上一张表第一只”可解析。
 - 多个 `analyses` 如果所有工具都指向同一日期，`_resolve_analysis` 只解析日期并返回 `analysis_scope=None`；当前问题自行指定指标，不再因为“多个分析范围”而提前澄清。不同日期仍返回 `clarify`。
+- `stock_kline` 和 `market_index_trend` 也属于可回指的分析工具；上一轮的 K 线/指数结果因此可用于“你上一答是否矛盾”“同一时间窗口比较”等追问。
 - 会话约束只来自显式会话请求和已提交引用，不来自 assistant 文案。
 - 当前用户明确条件覆盖页面条件和历史条件。
 
@@ -1218,7 +1224,7 @@ backend/tests/test_deployment.py
 
 最近一次完整验证：
 
-- 后端：`2069 passed, 1 skipped, 22 subtests passed`
+- 后端：`2077 passed, 1 skipped, 22 subtests passed`
 - 前端：`243 passed`
 - 前端生产构建通过
 

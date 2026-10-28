@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 from app.agents.session_history import is_session_recap_query
 
 
@@ -9,9 +11,12 @@ from app.agents.session_history import is_session_recap_query
 # narrow: it catches data questions that previously reused stale/hallucinated
 # context instead of querying the tool in this run.
 _REQUIRED_TOOL_TERMS = (
+    ("market_summary", (
+        "开板率", "炸板未回封率", "未回封率", "触板股",
+    )),
     ("stock_kline", (
         "k线", "K线", "收盘价", "成交量", "均线", "量比", "回撤",
-        "价格与成交量", "二十个交易日", "20个交易日",
+        "价格与成交量",
     )),
     ("dragon_tiger_list", (
         "龙虎榜", "上榜原因", "上榜", "席位", "买入额", "卖出额",
@@ -23,6 +28,9 @@ _REQUIRED_TOOL_TERMS = (
 )
 _DEFINITION_TERMS = ("什么是", "是什么意思", "解释一下", "怎么理解")
 _SKIP_STATUSES = frozenset({"clarify", "refuse", "cancelled", "error"})
+_DATE_OR_TIME = re.compile(
+    r"(20\d{2}[-年]\d{1,2}[-月]\d{1,2}日?|\b\d{1,2}:\d{2}(?::\d{2})?\b)"
+)
 
 
 def required_tool_for_query(query: str) -> str | None:
@@ -40,8 +48,14 @@ def required_tool_for_query(query: str) -> str | None:
 
 
 def answered_with_data_values(answer: str | None) -> bool:
-    """A prose answer with no digits is not making a market-data claim."""
-    return any(character.isdigit() for character in str(answer or ""))
+    """Whether the answer still contains a numeric market claim.
+
+    Dates and clock times are stripped first: saying that data is unavailable
+    on 2026-10-28 is not a claim that the rate is zero.
+    """
+
+    text = _DATE_OR_TIME.sub("", str(answer or ""))
+    return any(character.isdigit() for character in text)
 
 
 def missing_required_tool(query: str, tool_calls: list[str] | None, status: str | None,

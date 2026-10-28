@@ -121,3 +121,26 @@ def test_fact_coverage_is_narrower_than_recap_detection():
     assert session_facts_cover_query("请回顾本会话：最先详细研究的股票和指数")
     assert session_facts_cover_query("本会话龙虎榜追问的是谁")
     assert not session_facts_cover_query("请回顾本会话的第三问原文")
+
+
+def test_ledger_falls_back_to_stock_code_in_user_question():
+    history = [
+        {"role": "user", "content": "天娱数科002354为什么上榜？请列出席位数据", "status": "success"},
+        {"role": "assistant", "content": "缺少本轮龙虎榜工具结果", "status": "success",
+         "metadata": {"task_status": "partial", "tool_calls": [], "stock_mentions": []}},
+    ]
+    ledger = build_session_ledger(history)
+    assert ledger[0]["stocks"] == [{"symbol": "002354", "name": ""}]
+
+
+def test_recap_question_does_not_become_the_dragon_tiger_followup():
+    from app.agents.session_history import build_session_facts
+
+    ledger = [
+        {"question": "天娱数科002354为什么上榜？请列出席位", "tools": [],
+         "stocks": [{"symbol": "002354", "name": "天娱数科"}]},
+        {"question": "请回顾本会话的龙虎榜追问股票", "tools": [],
+         "stocks": [{"symbol": "603037", "name": "凯众股份"}]},
+    ]
+    facts = build_session_facts(ledger)
+    assert facts["dragon_tiger_followup_stock"] == {"symbol": "002354", "name": "天娱数科"}
