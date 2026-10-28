@@ -4,8 +4,8 @@
 
 - 原表现：新会话 `chat_rerun_41592a2fd1b347f8951d99e6ea85ba92` 中，Q4 把 `limit_up_events` 的 69 条触板事件误当成“收盘封住”，再加 28 条 broken_board 得到 97，算成 41/97、28/97；正确应为 56/69、28/69。Q10/Q15 对上一轮 K 线/指数回答返回 `clarify/reference_ambiguous`。Q13 的涨停/炸板事件问题被守卫误判为需要 `stock_kline`。Q19 缺少龙虎榜追问股票，Q20 把该股票错误写成凯众股份 603037 而不是天娱数科 002354。
 - 原因：`market_summary` 只支持最新本地日，历史日期需要从 `limit_up_events` 单日事件计算，但模型自行用事件行相加；`stock_kline`/`market_index_trend` 未列入 `ANALYSIS_TOOLS`，无法生成上一轮 analysis referent；守卫把“二十个交易日”单独当成 K 线语义；`limit_up_events` 缺少提前计算的单日比率；ledger 只从 assistant metadata 取股票，且回顾问题中的“龙虎榜”字样会被误识别为真实追问。
-- 修复：`limit_up_events` 新增单日 `event_summary`（touched/closed/opened/unsealed 与两个 rate，在 limit 截断前计算）；prompt 要求开板率/未回封率优先使用 `market_summary` 或 `event_summary`，禁止事件行相加重算；`stock_kline`、`market_index_trend` 加入 `ANALYSIS_TOOLS`；守卫移除“二十个交易日”单独触发 K 线；ledger 在 assistant 缺少股票时回退到用户问题代码，回顾问题不参与龙虎榜追问识别。
-- 验证：真实复验 Q4 返回 56/69（81.16%）、28/69（40.58%）；Q10/Q15 均能继续并调用对应工具；Q13 调用 `limit_up_events`；Q17 调用 `dragon_tiger_list` 返回完整字段；回顾返回凯众股份（603037）和天娱数科（002354）。后端全量 2077 passed、1 skipped、22 subtests passed。
+- 修复：`limit_up_events` 新增单日 `event_summary`（touched/closed/opened/unsealed 与两个 rate，在 limit 截断前计算）；prompt 要求开板率/未回封率优先使用 `market_summary` 或 `event_summary`，禁止事件行相加重算；`stock_kline`、`market_index_trend` 加入 `ANALYSIS_TOOLS`；守卫移除“二十个交易日”单独触发 K 线，新增涨停/炸板事件记录必须调用 `limit_up_events`；仅“沿用/刚才”的比率追问可复用上一轮 market_summary；ledger 在 assistant 缺少股票时回退到用户问题代码，回顾问题不参与龙虎榜追问识别。
+- 验证：真实复验 Q4 返回 56/69（81.16%）、28/69（40.58%）；Q10/Q15 均能继续并调用对应工具；Q13 调用 `limit_up_events`；Q17 调用 `dragon_tiger_list` 返回完整字段；回顾返回凯众股份（603037）和天娱数科（002354）。后端全量 2081 passed、1 skipped、22 subtests passed。
 
 ## 2026-10-28：数据问题无本轮工具调用，生成旧数据/错误字段状态
 

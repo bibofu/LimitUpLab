@@ -107,3 +107,8 @@ def test_prompt_requires_market_summary_for_opening_and_unsealed_rates():
     assert "开板率、炸板未回封率优先引用 market_summary" in prompt
     assert "event_summary" in prompt
     assert "touched_count 已包含收盘未回封" in prompt
+
+
+def test_prompt_requires_limit_up_events_for_event_records():
+    prompt = system_prompt(V1_TOOLS)
+    assert "个股涨停或炸板事件记录必须调用 limit_up_events" in prompt

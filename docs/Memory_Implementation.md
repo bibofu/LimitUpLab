@@ -361,7 +361,8 @@ Token 估算：
 实现位置：`app/agents/grounding.py`，在 `result_from_state` 交付前执行。
 
 - `required_tool_for_query` 对明显的数据问题要求特定工具：
-  - 开板率、炸板未回封率、未回封率、触板股 → `market_summary`；历史日期市场综述不可用时，`limit_up_events.event_summary` 提供同一单日口径；
+  - 开板率、炸板未回封率、未回封率、触板股 → `market_summary`；历史日期市场综述不可用时，`limit_up_events.event_summary` 提供同一单日口径；带“沿用/刚才”的比率追问可以复用上一轮 market_summary；
+  - 个股涨停/炸板事件记录 → `limit_up_events`；不能从 K 线、历史回答或摘要推断；
   - K 线、收盘价、成交量、均线、量比、回撤、价格与成交量 → `stock_kline`；
   - 龙虎榜、上榜、席位、买入额、卖出额、净买额、机构/游资净买 → `dragon_tiger_list`；
   - 上证指数、深证成指、创业板指、三大指数 → `market_index_trend`。
@@ -372,6 +373,8 @@ Token 估算：
   - 状态不是 `clarify/refuse/cancelled/error`；
   - 不是显式记忆命令，也不是会话回顾问题。
 - 阻止时返回 `partial/tool_evidence_required`，明确说明“需要本轮工具结果，未发布旧数据”，不自动复用上一轮或摘要中的数字。
+- 只有“沿用/刚才”的开板率追问可以复用上一轮 `market_summary`；K 线、指数和龙虎榜追问仍需本轮工具。
+- 如果回答本身只是在说“需要本轮工具/请重新提问”，即使没有数字，也会被标为 partial，而不是 complete。
 - 这是 fail-closed 守卫，不会自动重试工具；用户重新提问后，模型应调用工具再回答。
 - `limit_up_events` 单日查询新增 `event_summary`：
   - `touched_count`、`closed_count`、`opened_count`、`unsealed_count`；
@@ -1224,7 +1227,7 @@ backend/tests/test_deployment.py
 
 最近一次完整验证：
 
-- 后端：`2077 passed, 1 skipped, 22 subtests passed`
+- 后端：`2081 passed, 1 skipped, 22 subtests passed`
 - 前端：`243 passed`
 - 前端生产构建通过
 

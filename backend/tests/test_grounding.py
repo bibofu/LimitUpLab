@@ -97,11 +97,33 @@ def test_rate_question_requires_market_summary():
 
 def test_event_window_question_does_not_require_stock_kline():
     query = "凯众股份603037截至2026年10月27日最近二十个交易日出现过哪些涨停或炸板记录？"
-    assert required_tool_for_query(query) is None
-    assert _result(query, answer="没有记录。").status == "complete"
+    assert required_tool_for_query(query) == "limit_up_events"
+    assert _result(query, answer="只有 1 条记录。").status == "partial"
 
 
 def test_unavailable_rate_answer_with_dates_is_not_treated_as_a_numeric_claim():
     query = "沿用刚才这一天，开板率与炸板未回封率分别是多少？"
     answer = "2026-10-28 15:22 的数据尚未落定，分子和分母都缺，无法计算。"
     assert _result(query, answer=answer).status == "complete"
+
+
+def test_event_record_question_requires_limit_up_events():
+    query = "凯众股份603037截至2026年10月27日最近二十个交易日出现过哪些涨停或炸板记录？"
+    assert required_tool_for_query(query) == "limit_up_events"
+    assert _result(query, answer="只有 1 条涨停记录").stop_reason == "tool_evidence_required"
+    assert _result(query, ["limit_up_events"], answer="只有 1 条涨停记录").status == "complete"
+
+
+def test_followup_can_use_prior_tool_result_without_repeating_the_tool():
+    rate = "沿用刚才这一天，开板率与炸板未回封率分别是多少？"
+    assert _result(rate, answer="56/69 ≈ 81.16%；28/69 ≈ 40.58%").status == "complete"
+    index = "同一时间窗口，请把上证指数、深证成指和创业板指的涨跌幅放在一张表里。"
+    assert _result(index, answer="上证 -1.74%，深证 -3.92%").stop_reason == "tool_evidence_required"
+
+
+def test_tool_unavailable_text_without_numbers_is_still_partial():
+    query = "天娱数科002354为什么上榜？请列出席位数据"
+    answer = "这个问题需要本轮龙虎榜工具的可核验结果，请重新提问。"
+    result = _result(query, answer=answer)
+    assert result.status == "partial"
+    assert result.stop_reason == "tool_evidence_required"

@@ -18,6 +18,10 @@ _REQUIRED_TOOL_TERMS = (
         "k线", "K线", "收盘价", "成交量", "均线", "量比", "回撤",
         "价格与成交量",
     )),
+    ("limit_up_events", (
+        "涨停或炸板记录", "涨停/炸板记录", "出现过哪些涨停",
+        "炸板记录", "涨停记录", "开板记录",
+    )),
     ("dragon_tiger_list", (
         "龙虎榜", "上榜原因", "上榜", "席位", "买入额", "卖出额",
         "净买额", "机构净买", "游资净买",
@@ -28,6 +32,8 @@ _REQUIRED_TOOL_TERMS = (
 )
 _DEFINITION_TERMS = ("什么是", "是什么意思", "解释一下", "怎么理解")
 _SKIP_STATUSES = frozenset({"clarify", "refuse", "cancelled", "error"})
+_RATE_FOLLOWUP_TERMS = ("沿用", "刚才")
+_TOOL_MISSING_PHRASES = ("需要本轮", "没有相应工具", "工具的可核验结果", "请重新提问")
 _DATE_OR_TIME = re.compile(
     r"(20\d{2}[-年]\d{1,2}[-月]\d{1,2}日?|\b\d{1,2}:\d{2}(?::\d{2})?\b)"
 )
@@ -64,7 +70,12 @@ def missing_required_tool(query: str, tool_calls: list[str] | None, status: str 
 
     if status in _SKIP_STATUSES:
         return False
-    if answer is not None and not answered_with_data_values(answer):
-        return False
     required = required_tool_for_query(query)
+    if required == "market_summary" and any(
+        term in str(query or "") for term in _RATE_FOLLOWUP_TERMS
+    ):
+        return False
+    if (answer is not None and not answered_with_data_values(answer)
+            and not any(phrase in str(answer) for phrase in _TOOL_MISSING_PHRASES)):
+        return False
     return bool(required and required not in set(tool_calls or []))
