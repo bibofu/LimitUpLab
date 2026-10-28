@@ -1,7 +1,7 @@
 import { ThumbsDown, ThumbsUp } from "lucide-react";
 import { useState } from "react";
 
-import { deleteAnswerFeedback, saveAnswerFeedback } from "../api";
+import { saveAnswerFeedback } from "../api";
 import type { AnswerFeedbackValue, AnswerFeedbackVote } from "../types";
 import {
   FEEDBACK_REASON_OPTIONS,
@@ -61,22 +61,6 @@ export function AnswerFeedback({
     }
   }
 
-  async function retract() {
-    if (pending) return;
-    setPending(true);
-    setError(false);
-    try {
-      await deleteAnswerFeedback(runId);
-      setSaved(null);
-      setDraft(EMPTY_DRAFT);
-      setExpanded(false);
-    } catch {
-      setError(true);
-    } finally {
-      setPending(false);
-    }
-  }
-
   function vote(value: AnswerFeedbackVote) {
     if (value === "up") {
       setExpanded(false);
@@ -99,32 +83,26 @@ export function AnswerFeedback({
       <div className="answer-feedback-actions">
         <button
           type="button"
+          className="answer-feedback-vote"
           aria-label="点赞"
           aria-pressed={saved?.vote === "up"}
           disabled={pending}
           onClick={() => vote("up")}
         >
-          <ThumbsUp size={13} aria-hidden="true" />
+          <ThumbsUp size={18} aria-hidden="true" />
+          <span>点赞</span>
         </button>
         <button
           type="button"
+          className="answer-feedback-vote"
           aria-label="点踩"
           aria-pressed={saved?.vote === "down"}
           disabled={pending}
           onClick={() => vote("down")}
         >
-          <ThumbsDown size={13} aria-hidden="true" />
+          <ThumbsDown size={18} aria-hidden="true" />
+          <span>点踩</span>
         </button>
-        {saved ? (
-          <button
-            type="button"
-            className="answer-feedback-retract"
-            disabled={pending}
-            onClick={() => void retract()}
-          >
-            撤销
-          </button>
-        ) : null}
       </div>
       {expanded ? (
         <fieldset disabled={pending}>

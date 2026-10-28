@@ -418,14 +418,6 @@ export async function saveAnswerFeedback(runId: string, payload: AnswerFeedbackP
   return result.feedback;
 }
 
-/** Retract the visitor's verdict without deleting the answer. */
-export function deleteAnswerFeedback(runId: string) {
-  return request<{ deleted: boolean }>(
-    `/api/agents/chat/runs/${encodeURIComponent(runId)}/feedback`,
-    { method: "DELETE" },
-  );
-}
-
 function adminHeaders(adminKey: string): Record<string, string> {
   return { "X-LimitUpLab-Admin-Key": adminKey };
 }

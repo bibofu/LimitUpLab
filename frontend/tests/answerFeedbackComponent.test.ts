@@ -26,7 +26,6 @@ const imports: Record<string, any> = {
   "lucide-react": require("lucide-react"),
   "../api": {
     saveAnswerFeedback: async () => null,
-    deleteAnswerFeedback: async () => ({ deleted: true }),
   },
   "../utils/answerFeedback": answerFeedback,
 };
@@ -45,14 +44,15 @@ const value = {
   updated_at: "2026-10-28T00:00:00Z",
 };
 
-test("a restored downvote renders its pressed state and retraction", () => {
+test("a restored downvote renders its pressed state without a retract action", () => {
   const markup = renderToStaticMarkup(
     createElement(component.exports.AnswerFeedback, { runId: "run_feedback", initial: value }),
   );
   assert.match(markup, /aria-label="回答反馈"/);
   assert.match(markup, /aria-label="点踩"/);
   assert.match(markup, /aria-pressed="true"/);
-  assert.match(markup, /撤销/);
+  assert.match(markup, /点赞/);
+  assert.doesNotMatch(markup, /撤销/);
 });
 
 test("an unanswered message renders both neutral vote buttons", () => {
