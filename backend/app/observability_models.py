@@ -61,6 +61,8 @@ class ObservabilityTotals(BaseModel):
     open_case_count: int = 0
     confirmed_case_count: int = 0
     closed_case_count: int = 0
+    sample_job_count: int = 0
+    sample_coverage: float | None = None
     mtta_seconds: float | None = None
     mttr_seconds: float | None = None
     p50_duration_ms: float | None = None

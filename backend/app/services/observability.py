@@ -78,6 +78,11 @@ class ObservabilityService:
             for name in ("confirmed", "fixing", "verifying", "closed")
         )
         totals.closed_case_count = status_map.get("closed", 0)
+        kind_map = {row["kind"]: int(row["count"]) for row in job_kind}
+        totals.sample_job_count = kind_map.get("sample", 0)
+        totals.sample_coverage = _ratio(
+            totals.sample_job_count, totals.answered_count,
+        )
         return ObservabilitySummary(
             days=window,
             period_started_at=start,
@@ -95,7 +100,7 @@ class ObservabilityService:
             job_status_counts={
                 row["status"]: int(row["count"]) for row in job_status
             },
-            job_kind_counts={row["kind"]: int(row["count"]) for row in job_kind},
+            job_kind_counts=kind_map,
             notes=list(NOTE_TEXT),
             generated_by="observability-summary-v1",
         )

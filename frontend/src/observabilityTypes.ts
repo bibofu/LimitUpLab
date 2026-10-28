@@ -48,6 +48,8 @@ export interface ObservabilityTotals {
   open_case_count: number;
   confirmed_case_count: number;
   closed_case_count: number;
+  sample_job_count: number;
+  sample_coverage: number | null;
   mtta_seconds: number | null;
   mttr_seconds: number | null;
   p50_duration_ms: number | null;

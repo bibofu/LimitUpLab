@@ -57,6 +57,7 @@ export function ObservabilityOverview({ summary }: { summary: ObservabilitySumma
         <Kpi label="估算成本" value={formatUsd(totals.estimated_cost_usd)} hint="按明确单价估算" />
         <Kpi label="点赞率" value={formatPercent(totals.like_ratio)} hint={`${formatCount(totals.up_count)} 赞 / ${formatCount(totals.down_count)} 踩`} />
         <Kpi label="反馈覆盖" value={formatPercent(totals.feedback_coverage)} hint={`每百答 ${formatCount(totals.down_per_100_answers)} 次点踩`} />
+        <Kpi label="抽检覆盖" value={formatPercent(totals.sample_coverage)} hint={`${formatCount(totals.sample_job_count)} 个抽样任务`} />
         <Kpi label="待处理案例" value={formatCount(totals.open_case_count)} hint={`已确认 ${formatCount(totals.confirmed_case_count)} · 已关闭 ${formatCount(totals.closed_case_count)}`} />
       </div>
 
