@@ -914,7 +914,7 @@ export function AgentChatDock({
           ) : null}
           {messages.map((item) => (
             <article
-              className={`chat-message chat-${item.role} ${item.status === "error" ? "chat-error" : ""}`}
+              className={`chat-message chat-${item.role} ${item.status === "error" ? "chat-error" : ""} ${item.role === "agent" && item.runId ? "chat-has-feedback" : ""}`}
               key={item.id}
             >
               {item.role === "agent" ? (

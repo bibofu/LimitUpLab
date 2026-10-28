@@ -739,6 +739,10 @@ td span {
   font-size: 17px;
 }
 
+.chat-message.chat-has-feedback {
+  padding-bottom: 8px;
+}
+
 .chat-message > p {
   margin: 0;
   color: #374151;
