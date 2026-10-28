@@ -1,0 +1,457 @@
+.admin-review {
+  display: grid;
+  gap: 16px;
+  padding: 8px 0 40px;
+  color: #202938;
+}
+
+.admin-review-gate-wrap {
+  min-height: 60vh;
+  place-items: center;
+}
+
+.admin-review-gate {
+  display: grid;
+  gap: 12px;
+  width: min(460px, 100%);
+  padding: 28px;
+  border: 1px solid #e9edf2;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.admin-review-gate h1,
+.admin-review-header h1 {
+  margin: 0;
+  font-size: 24px;
+  line-height: 1.25;
+}
+
+.admin-review-gate p,
+.admin-review-header p {
+  margin: 0;
+  color: #6b7280;
+  line-height: 1.6;
+}
+
+.admin-review-gate input {
+  padding: 9px 11px;
+  border: 1px solid #dbe2ea;
+  border-radius: 6px;
+  font: inherit;
+}
+
+.admin-review-gate button,
+.admin-review-header-actions button,
+.admin-review-tabs button,
+.admin-review-form-actions button {
+  padding: 7px 12px;
+  border: 1px solid #dbe2ea;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #374151;
+  font: inherit;
+  cursor: pointer;
+}
+
+.admin-review-gate button:hover:not(:disabled),
+.admin-review-header-actions button:hover:not(:disabled),
+.admin-review-form-actions button:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.admin-review button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.admin-review-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 20px;
+  border: 1px solid #e9edf2;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.admin-review-header-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.admin-review-tabs {
+  display: flex;
+  gap: 6px;
+  border-bottom: 1px solid #e9edf2;
+}
+
+.admin-review-tabs button {
+  border: 0;
+  border-bottom: 2px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: #6b7280;
+}
+
+.admin-review-tabs button[aria-pressed="true"] {
+  border-bottom-color: #1d4ed8;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.admin-review-notice {
+  padding: 9px 12px;
+  border: 1px solid #cde5d5;
+  border-radius: 6px;
+  background: #f2faf5;
+  color: #24623a;
+  font-size: 13px;
+}
+
+.admin-review-notice.error {
+  border-color: #f1c7c2;
+  background: #fdf3f2;
+  color: #b42318;
+}
+
+.admin-review-cases {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+
+.admin-review-list,
+.admin-review-detail,
+.admin-review-panel {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e9edf2;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.admin-review-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+
+.admin-review-filters label,
+.admin-review-form label {
+  display: grid;
+  gap: 4px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.admin-review-filters select,
+.admin-review-form select,
+.admin-review-form input,
+.admin-review-form textarea {
+  padding: 6px 8px;
+  border: 1px solid #dbe2ea;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #374151;
+  font: inherit;
+  font-size: 13px;
+}
+
+.admin-review-form textarea {
+  resize: vertical;
+}
+
+.admin-review-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.admin-review-table th,
+.admin-review-table td {
+  padding: 8px 9px;
+  border-bottom: 1px solid #eef1f5;
+  text-align: left;
+  vertical-align: top;
+}
+
+.admin-review-table th {
+  color: #6b7280;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.admin-review-table tr.selected {
+  background: #f5f8ff;
+}
+
+.admin-review-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: #1d4ed8;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.admin-review-link:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.admin-review-badge {
+  display: inline-block;
+  margin-right: 4px;
+  padding: 1px 6px;
+  border: 1px solid #e0e5ec;
+  border-radius: 999px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: nowrap;
+}
+
+.admin-review-badge.status-new {
+  border-color: #bfd3f6;
+  background: #eef4ff;
+  color: #1d4ed8;
+}
+
+.admin-review-badge.status-confirmed {
+  border-color: #f0d59a;
+  background: #fdf8ec;
+  color: #8a5a00;
+}
+
+.admin-review-badge.status-fixing,
+.admin-review-badge.status-verifying {
+  border-color: #c9d7f2;
+  background: #f3f7fe;
+  color: #31548f;
+}
+
+.admin-review-badge.status-closed {
+  border-color: #cde5d5;
+  background: #f2faf5;
+  color: #24623a;
+}
+
+.admin-review-badge.status-dismissed,
+.admin-review-badge.status-insufficient {
+  border-color: #e4e4e7;
+  background: #f7f7f8;
+  color: #6b7280;
+}
+
+.admin-review-badge.new-signal {
+  border-color: #f1c7c2;
+  background: #fdf3f2;
+  color: #b42318;
+}
+
+.admin-review-badge.vote-up {
+  border-color: #cde5d5;
+  background: #f2faf5;
+  color: #24623a;
+}
+
+.admin-review-badge.vote-down {
+  border-color: #f1c7c2;
+  background: #fdf3f2;
+  color: #b42318;
+}
+
+.admin-review-empty {
+  margin: 12px 0;
+  color: #6b7280;
+  font-size: 13px;
+}
+
+.admin-review-muted {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.admin-review-mono {
+  color: #6b7280;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.admin-review-case {
+  display: grid;
+  gap: 18px;
+}
+
+.admin-review-case header {
+  display: grid;
+  gap: 6px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.admin-review-case h2,
+.admin-review-panel h2 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #202938;
+}
+
+.admin-review-case section {
+  display: grid;
+  gap: 6px;
+}
+
+.admin-review-question {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.6;
+}
+
+.admin-review-answer {
+  max-height: 320px;
+  margin: 0;
+  padding: 10px;
+  overflow: auto;
+  border: 1px solid #eef1f5;
+  border-radius: 6px;
+  background: #fcfcfd;
+  color: #374151;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.65;
+  white-space: pre-wrap;
+}
+
+.admin-review-evidence {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.admin-review-evidence div {
+  display: grid;
+  grid-template-columns: 160px minmax(0, 1fr);
+  gap: 8px;
+  font-size: 12px;
+}
+
+.admin-review-evidence dt {
+  color: #6b7280;
+}
+
+.admin-review-evidence dd {
+  margin: 0;
+  color: #374151;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.admin-review-signals,
+.admin-review-events {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding-left: 18px;
+  font-size: 13px;
+}
+
+.admin-review-signals li > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-review-signals pre,
+.admin-review-events pre {
+  max-height: 220px;
+  margin: 6px 0 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid #eef1f5;
+  border-radius: 5px;
+  background: #fcfcfd;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.admin-review-signals details summary {
+  color: #6b7280;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.admin-review-events p {
+  margin: 4px 0 0;
+  color: #374151;
+}
+
+.admin-review-form {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #e9edf2;
+  border-radius: 8px;
+  background: #fbfcfd;
+}
+
+.admin-review-form-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
+
+.admin-review-form-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.admin-review-form-actions button:first-child {
+  border-color: #bfd3f6;
+  background: #eef4ff;
+  color: #1d4ed8;
+  font-weight: 600;
+}
+
+.admin-review-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.admin-review-panel-head p {
+  margin: 4px 0 0;
+}
+
+@media (max-width: 1100px) {
+  .admin-review-cases {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-review-list {
+    overflow-x: auto;
+  }
+}
+
+@media (max-width: 640px) {
+  .admin-review-header,
+  .admin-review-panel-head {
+    flex-direction: column;
+  }
+
+  .admin-review-form-row,
+  .admin-review-evidence div {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
