@@ -62,7 +62,7 @@ LLM Judge ──────┘      answer_review_cases（人工工作台）
 | `vote` | `up` / `down` |
 | `reasons_json` | 原因标签，最多 5 个 |
 | `comment` | 最多 1000 字，去除控制字符 |
-| `created_at` / `updated_at` | 改票覆盖，撤销删除 |
+| `created_at` / `updated_at` | 改票覆盖；删除接口保留，界面不展示撤销 |
 
 ### `answer_review_signals`
 
@@ -113,7 +113,7 @@ Judge 成本账本。记录模型、协议版本、prompt/completion/total token
 2. 写接口校验 `owner_id`、run 存在且回答已落库。
 3. 同一事务 upsert 当前投票，并追加 `downvote` 信号。
 4. 会话加载时一次性批量带出当前 owner 的投票，避免每个回答一次请求。
-5. 改票覆盖当前状态，撤销删除当前状态；历史保留在信号流。
+5. 改票覆盖当前状态；界面不提供撤销入口，管理 API 仍保留删除能力；历史保留在信号流。
 
 反馈接口不触发模型调用，不增加聊天延迟。聊天请求本身已有频率限制，且一次 run 只能投一票，因此不额外引入限流组件。
 

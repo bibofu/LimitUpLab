@@ -312,7 +312,7 @@ DEEPSEEK_API_KEY=<your-api-key>
 
 真实 API Key 不应提交到 Git。未配置 LLM 时，结构化评分、数据检索等确定性接口仍可运行；生产聊天 ReAct 会明确报配置错误，不会伪装成正常回答。
 
-公开运行时建议同时配置 Agent 容量。默认每访客 8 次/分钟、60 次/天、同访客 1 个并发、全站 4 个并发。管理接口 `GET /api/agents/usage?days=7` 可查看请求、拒绝、LLM 调用和 token 汇总，`GET /api/agents/feedback/summary?days=7` 可查看点赞率、反馈覆盖率和点踩原因，均需要 `X-LimitUpLab-Admin-Key`。回答底部的点赞/点踩只保存当前访客对该 run 的一票；改票覆盖、撤销删除，投票不会进入聊天推理链路。审核队列、抽样检查和 LLM Judge 的分期方案与指标口径见 [在线反馈与 Badcase 回收](docs/Online_Observability_and_Badcase.md)。
+公开运行时建议同时配置 Agent 容量。默认每访客 8 次/分钟、60 次/天、同访客 1 个并发、全站 4 个并发。管理接口 `GET /api/agents/usage?days=7` 可查看请求、拒绝、LLM 调用和 token 汇总，`GET /api/agents/feedback/summary?days=7` 可查看点赞率、反馈覆盖率和点踩原因，均需要 `X-LimitUpLab-Admin-Key`。回答底部的点赞/点踩只保存当前访客对该 run 的一票；改票覆盖当前投票，界面不提供撤销入口（管理 API 仍保留删除能力），投票不会进入聊天推理链路。审核队列、抽样检查和 LLM Judge 的分期方案与指标口径见 [在线反馈与 Badcase 回收](docs/Online_Observability_and_Badcase.md)。
 
 管理员审核台位于隐藏路由 `/admin/observability`，不进入公共导航；密钥只保存在页面内存。点踩会写入追加型信号，`review-worker` 把信号聚合为每个 run 唯一的案例，并按配置抽样正常回答。审核结论使用修订号防并发覆盖，导出内容沿用 `badCase.md` 格式且不含 owner 标识。worker 还会对最近完成的回答执行确定性契约检查（错误、数字无工具证据、部分完成未披露缺口、合规措辞等），失败信号进入案例；LLM Judge 默认关闭，人工标注集位于 `backend/evals/answer_review_cases.json`，校准方式为 `backend\.venv\Scripts\python.exe backend\scripts\evaluate_answer_review.py`，逐维 kappa 达到 0.6 且样本足够后再开启。
 
