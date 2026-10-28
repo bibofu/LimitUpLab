@@ -43,8 +43,12 @@ class AnswerFeedbackRepository:
         """Create or replace the caller's verdict for one completed answer."""
 
         data = AnswerFeedbackInput.model_validate(payload)
-        reasons = list(dict.fromkeys(data.reasons))[:MAX_REASONS]
-        comment = _clean_comment(data.comment)
+        reasons = (
+            []
+            if data.vote == "up"
+            else list(dict.fromkeys(data.reasons))[:MAX_REASONS]
+        )
+        comment = "" if data.vote == "up" else _clean_comment(data.comment)
         stamp = datetime.now(timezone.utc).isoformat()
         with connect(self.database_url) as connection:
             initialize_database(connection)

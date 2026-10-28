@@ -63,6 +63,14 @@ def test_feedback_is_owner_scoped_and_normalizes(postgresql_database):
     saved = repository.save(run_id, owner, AnswerFeedbackInput(vote="up"))
     assert saved.vote == "up" and saved.reasons == []
 
+    positive = _completed_run(owner, "feedback-positive-normalize")
+    saved_positive = repository.save(
+        positive,
+        owner,
+        AnswerFeedbackInput(vote="up", reasons=["data_error"], comment="旧说明"),
+    )
+    assert saved_positive.reasons == [] and saved_positive.comment == ""
+
     updated = repository.save(
         run_id,
         owner,
