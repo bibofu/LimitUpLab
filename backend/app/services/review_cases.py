@@ -267,6 +267,9 @@ class ReviewCaseService:
     ) -> ReviewCaseDetail:
         """Apply one audited update with an optimistic revision check."""
 
+        note = payload.note.strip()
+        if not note:
+            raise ReviewCaseValidationError("审核说明不能为空")
         with closing(connect(self.database_url)) as db:
             initialize_database(db)
             begin_write(db)
@@ -333,7 +336,7 @@ class ReviewCaseService:
                     current["status"],
                     target_status,
                     json.dumps(changed, ensure_ascii=False),
-                    payload.note.strip(),
+                    note,
                     actor,
                 ),
             )

@@ -122,6 +122,11 @@ def test_case_updates_require_revision_and_required_fields(postgresql_database):
             case_id,
             ReviewCaseUpdate(status="closed", verification="通过", note="关闭", revision=1),
         )
+    with pytest.raises(ReviewCaseValidationError, match="审核说明"):
+        service.update_case(
+            case_id,
+            ReviewCaseUpdate(status="confirmed", symptom="日期错误", note="   ", revision=1),
+        )
 
     detail = service.update_case(
         case_id,
