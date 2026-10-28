@@ -15,7 +15,7 @@ from alembic.runtime.migration import MigrationContext
 
 
 BASELINE_REVISION = "0001_postgresql_baseline"
-HEAD_REVISION = "0018_review_jobs"
+HEAD_REVISION = "0019_review_judge_calls"
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 

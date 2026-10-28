@@ -166,7 +166,12 @@ class ReviewSettings:
     sample_rate: float
     sample_daily_limit: int
     judge_enabled: bool
+    judge_sample_rate: float
     judge_daily_call_limit: int
+    judge_max_calls_per_job: int
+    judge_timeout_seconds: float
+    judge_max_output_tokens: int
+    judge_max_input_chars: int
     retention_days: int
 
 
@@ -182,9 +187,24 @@ def review_settings() -> ReviewSettings:
             "LIMITUPLAB_REVIEW_SAMPLE_DAILY_LIMIT", DEFAULT_REVIEW_SAMPLE_DAILY_LIMIT, 0, 1000,
         ),
         judge_enabled=env_bool("LIMITUPLAB_REVIEW_JUDGE_ENABLED", False),
+        judge_sample_rate=_clamped_float(
+            "LIMITUPLAB_REVIEW_JUDGE_SAMPLE_RATE", 0.05, 0.0, 1.0,
+        ),
         judge_daily_call_limit=_clamped_int(
             "LIMITUPLAB_REVIEW_JUDGE_DAILY_CALL_LIMIT",
             DEFAULT_REVIEW_JUDGE_DAILY_CALL_LIMIT, 0, 10000,
+        ),
+        judge_max_calls_per_job=_clamped_int(
+            "LIMITUPLAB_REVIEW_JUDGE_MAX_CALLS_PER_JOB", 2, 1, 5,
+        ),
+        judge_timeout_seconds=_clamped_float(
+            "LIMITUPLAB_REVIEW_JUDGE_TIMEOUT_SECONDS", 35.0, 5.0, 300.0,
+        ),
+        judge_max_output_tokens=_clamped_int(
+            "LIMITUPLAB_REVIEW_JUDGE_MAX_OUTPUT_TOKENS", 1200, 200, 8000,
+        ),
+        judge_max_input_chars=_clamped_int(
+            "LIMITUPLAB_REVIEW_JUDGE_MAX_INPUT_CHARS", 60000, 4000, 200000,
         ),
         retention_days=_clamped_int(
             "LIMITUPLAB_REVIEW_RETENTION_DAYS", DEFAULT_REVIEW_RETENTION_DAYS, 1, 3650,

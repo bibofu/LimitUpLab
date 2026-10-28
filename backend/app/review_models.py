@@ -86,6 +86,16 @@ class ReviewCaseSummary(BaseModel):
     closed_at: datetime | None = None
 
 
+class ReviewDetectorReport(BaseModel):
+    """A completed deterministic or judge report attached to a run."""
+
+    job_id: str
+    kind: str
+    detector_version: str
+    created_at: datetime
+    report: dict[str, Any] = Field(default_factory=dict)
+
+
 class ReviewCaseDetail(ReviewCaseSummary):
     """One case with its frozen answer snapshot, signals and review history."""
 
@@ -101,6 +111,7 @@ class ReviewCaseDetail(ReviewCaseSummary):
     revision: int = 1
     signals: list[ReviewSignal] = Field(default_factory=list)
     events: list[ReviewCaseEvent] = Field(default_factory=list)
+    reports: list[ReviewDetectorReport] = Field(default_factory=list)
 
 
 class ReviewCasesResponse(BaseModel):
@@ -182,3 +193,10 @@ class ReviewSampleResponse(BaseModel):
     """Counts from a manual sampling request."""
 
     enqueued: int
+
+
+class ReviewRecheckResponse(BaseModel):
+    """Jobs queued for one explicit recheck."""
+
+    deterministic_jobs: int
+    judge_jobs: int
