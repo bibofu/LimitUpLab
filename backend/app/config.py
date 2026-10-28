@@ -27,6 +27,10 @@ PROXY_ENV_NAMES = (
 LANGFUSE_HOST_ENV_NAMES = ("LANGFUSE_HOST", "LANGFUSE_BASE_URL")
 DEFAULT_LANGFUSE_ENVIRONMENT = "local"
 DEFAULT_LANGFUSE_SAMPLE_RATE = 1.0
+DEFAULT_REVIEW_SAMPLE_RATE = 0.02
+DEFAULT_REVIEW_SAMPLE_DAILY_LIMIT = 10
+DEFAULT_REVIEW_JUDGE_DAILY_CALL_LIMIT = 50
+DEFAULT_REVIEW_RETENTION_DAYS = 180
 # Estimated-token budget for one model input. The production tool catalog and
 # system rules already consume about 20k estimate units, so the previous 24k
 # default left too little room for current-run evidence.
@@ -152,6 +156,66 @@ def langfuse_settings() -> LangfuseSettings:
         sample_rate=_read_sample_rate("LIMITUPLAB_LANGFUSE_SAMPLE_RATE"),
         environment=environment,
     )
+
+
+@dataclass(frozen=True)
+class ReviewSettings:
+    """Resolved online review configuration; workers fail closed on bad values."""
+
+    enabled: bool
+    sample_rate: float
+    sample_daily_limit: int
+    judge_enabled: bool
+    judge_daily_call_limit: int
+    retention_days: int
+
+
+def review_settings() -> ReviewSettings:
+    """Read review automation settings with bounded defaults."""
+
+    return ReviewSettings(
+        enabled=env_bool("LIMITUPLAB_REVIEW_ENABLED", True),
+        sample_rate=_clamped_float(
+            "LIMITUPLAB_REVIEW_SAMPLE_RATE", DEFAULT_REVIEW_SAMPLE_RATE, 0.0, 1.0,
+        ),
+        sample_daily_limit=_clamped_int(
+            "LIMITUPLAB_REVIEW_SAMPLE_DAILY_LIMIT", DEFAULT_REVIEW_SAMPLE_DAILY_LIMIT, 0, 1000,
+        ),
+        judge_enabled=env_bool("LIMITUPLAB_REVIEW_JUDGE_ENABLED", False),
+        judge_daily_call_limit=_clamped_int(
+            "LIMITUPLAB_REVIEW_JUDGE_DAILY_CALL_LIMIT",
+            DEFAULT_REVIEW_JUDGE_DAILY_CALL_LIMIT, 0, 10000,
+        ),
+        retention_days=_clamped_int(
+            "LIMITUPLAB_REVIEW_RETENTION_DAYS", DEFAULT_REVIEW_RETENTION_DAYS, 1, 3650,
+        ),
+    )
+
+
+def _clamped_float(name: str, default: float, minimum: float, maximum: float) -> float:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return default
+    if value < minimum or value > maximum:
+        return default
+    return value
+
+
+def _clamped_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return default
+    if value < minimum or value > maximum:
+        return default
+    return value
 
 
 def configured_cors_origins() -> list[str]:
