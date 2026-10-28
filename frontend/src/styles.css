@@ -788,7 +788,9 @@ td span {
 .answer-feedback {
   display: grid;
   gap: 8px;
-  margin-top: 6px;
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px solid #e9edf2;
   color: #6b7280;
   font-size: 12px;
 }
