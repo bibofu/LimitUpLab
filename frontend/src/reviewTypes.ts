@@ -66,6 +66,14 @@ export interface ReviewCaseSummary {
   closed_at: string | null;
 }
 
+export interface ReviewDetectorReport {
+  job_id: string;
+  kind: string;
+  detector_version: string;
+  created_at: string;
+  report: Record<string, unknown>;
+}
+
 export interface ReviewCaseDetail extends ReviewCaseSummary {
   question: string;
   answer: string;
@@ -79,6 +87,7 @@ export interface ReviewCaseDetail extends ReviewCaseSummary {
   revision: number;
   signals: ReviewSignal[];
   events: ReviewCaseEvent[];
+  reports: ReviewDetectorReport[];
 }
 
 export interface ReviewCasesResponse {
@@ -151,4 +160,9 @@ export interface ReviewDrainResponse {
 
 export interface ReviewSampleResponse {
   enqueued: number;
+}
+
+export interface ReviewRecheckResponse {
+  deterministic_jobs: number;
+  judge_jobs: number;
 }

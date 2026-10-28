@@ -267,6 +267,72 @@
   color: #b42318;
 }
 
+.admin-review-badge.verdict-pass {
+  border-color: #cde5d5;
+  background: #f2faf5;
+  color: #24623a;
+}
+
+.admin-review-badge.verdict-fail {
+  border-color: #f1c7c2;
+  background: #fdf3f2;
+  color: #b42318;
+}
+
+.admin-review-badge.verdict-unknown {
+  border-color: #f0d59a;
+  background: #fdf8ec;
+  color: #8a5a00;
+}
+
+.admin-review-detectors {
+  display: grid;
+  gap: 8px;
+}
+
+.admin-review-detector {
+  padding: 8px 10px;
+  border: 1px solid #eef1f5;
+  border-radius: 6px;
+  background: #fcfcfd;
+  font-size: 12px;
+}
+
+.admin-review-detector summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.admin-review-checks {
+  display: grid;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding-left: 16px;
+}
+
+.admin-review-checks li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-review-checks pre {
+  width: 100%;
+  max-height: 180px;
+  margin: 4px 0 0;
+  padding: 6px;
+  overflow: auto;
+  border: 1px solid #eef1f5;
+  border-radius: 4px;
+  background: #ffffff;
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
 .admin-review-empty {
   margin: 12px 0;
   color: #6b7280;

@@ -42,6 +42,7 @@ const detail: ReviewCaseDetail = {
   revision: 3,
   signals: [],
   events: [],
+  reports: [],
 };
 
 test("review labels cover Chinese status, source and severity text", () => {

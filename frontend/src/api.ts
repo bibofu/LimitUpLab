@@ -11,6 +11,7 @@ import type {
   ReviewDrainResponse,
   ReviewFeedbackResponse,
   ReviewJobsResponse,
+  ReviewRecheckResponse,
   ReviewSampleResponse,
   ReviewSeverity,
   ReviewSource,
@@ -495,6 +496,14 @@ export function drainReviewJobs(adminKey: string, limit = 10) {
 export function sampleReviewRuns(adminKey: string, limit = 5) {
   return request<ReviewSampleResponse>(
     `/api/admin/review/sample?limit=${limit}`,
+    { method: "POST", headers: adminHeaders(adminKey) },
+    60_000,
+  );
+}
+
+export function recheckReviewRun(adminKey: string, runId: string) {
+  return request<ReviewRecheckResponse>(
+    `/api/admin/review/runs/${encodeURIComponent(runId)}/recheck`,
     { method: "POST", headers: adminHeaders(adminKey) },
     60_000,
   );

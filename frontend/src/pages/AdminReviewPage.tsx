@@ -7,12 +7,14 @@ import {
   fetchReviewCases,
   fetchReviewFeedback,
   fetchReviewJobs,
+  recheckReviewRun,
   sampleReviewRuns,
   updateReviewCase,
 } from "../api";
 import type {
   ReviewCaseDetail,
   ReviewCaseSummary,
+  ReviewDetectorReport,
   ReviewFeedbackRow,
   ReviewJob,
   ReviewSeverity,
@@ -221,6 +223,24 @@ export function AdminReviewPage() {
     }
   }
 
+  async function recheckCurrent() {
+    if (!detail?.run_id) return;
+    setBusy(true);
+    setError("");
+    setNotice("");
+    try {
+      const result = await recheckReviewRun(adminKey, detail.run_id);
+      setNotice(
+        `已排队检查：确定性 ${result.deterministic_jobs} 个，Judge ${result.judge_jobs} 个；在“任务”页处理一批后生成报告`,
+      );
+      await loadWorkspace(adminKey);
+    } catch (caught) {
+      setError(reviewErrorMessage(caught));
+    } finally {
+      setBusy(false);
+    }
+  }
+
   if (!adminKey) {
     return (
       <main className="admin-review admin-review-gate-wrap">
@@ -385,6 +405,7 @@ export function AdminReviewPage() {
                 onNote={setNote}
                 onSave={saveCase}
                 onExport={downloadExport}
+                onRecheck={recheckCurrent}
               />
             ) : (
               <p className="admin-review-empty">选择左侧案例查看回答、证据和审核历史。</p>
@@ -411,6 +432,7 @@ function CaseDetail({
   onNote,
   onSave,
   onExport,
+  onRecheck,
 }: {
   detail: ReviewCaseDetail;
   form: ReviewCaseForm;
@@ -420,6 +442,7 @@ function CaseDetail({
   onNote: (value: string) => void;
   onSave: (event: FormEvent<HTMLFormElement>) => void;
   onExport: () => void;
+  onRecheck: () => void;
 }) {
   function update(patch: Partial<ReviewCaseForm>) {
     onForm({ ...form, ...patch });
@@ -494,6 +517,20 @@ function CaseDetail({
             </li>
           ))}
         </ul>
+      </section>
+
+      <section>
+        <h2>自动检查报告</h2>
+        {detail.reports.length === 0 ? (
+          <p className="admin-review-empty">
+            尚无检查报告。可点击“重新检查”，再到任务页处理一批。
+          </p>
+        ) : null}
+        <div className="admin-review-detectors">
+          {detail.reports.map(report => (
+            <DetectorReportView key={report.job_id} report={report} />
+          ))}
+        </div>
       </section>
 
       <form className="admin-review-form" onSubmit={onSave}>
@@ -587,6 +624,13 @@ function CaseDetail({
           >
             导出 Markdown
           </button>
+          <button
+            type="button"
+            disabled={busy || !detail.run_id}
+            onClick={onRecheck}
+          >
+            重新检查
+          </button>
         </div>
       </form>
 
@@ -607,6 +651,73 @@ function CaseDetail({
         </ol>
       </section>
     </article>
+  );
+}
+
+function recordList(value: unknown): Record<string, unknown>[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is Record<string, unknown> =>
+      Boolean(item) && typeof item === "object")
+    : [];
+}
+
+function DetectorReportView({ report }: { report: ReviewDetectorReport }) {
+  const overall = typeof report.report.overall === "string"
+    ? report.report.overall
+    : "unknown";
+  const checks = recordList(report.report.checks);
+  const dimensions = recordList(report.report.dimensions);
+  return (
+    <details className="admin-review-detector" open={overall === "fail"}>
+      <summary>
+        <span className={`admin-review-badge verdict-${overall}`}>{overall}</span>
+        <strong>{report.kind}</strong>
+        <span className="admin-review-muted">
+          {report.detector_version} · {formatReviewTime(report.created_at)}
+        </span>
+      </summary>
+      {checks.length ? (
+        <ul className="admin-review-checks">
+          {checks.map((check, index) => {
+            const verdict = typeof check.verdict === "string" ? check.verdict : "unknown";
+            return (
+              <li key={`${report.job_id}-check-${index}`}>
+                <span className={`admin-review-badge verdict-${verdict}`}>{verdict}</span>
+                <strong>{String(check.check ?? "check")}</strong>
+                <span>{String(check.summary ?? "")}</span>
+                {check.evidence && typeof check.evidence === "object" ? (
+                  <details>
+                    <summary>证据</summary>
+                    <pre>{JSON.stringify(check.evidence, null, 2)}</pre>
+                  </details>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      {dimensions.length ? (
+        <ul className="admin-review-checks">
+          {dimensions.map((dimension, index) => {
+            const verdict = typeof dimension.verdict === "string" ? dimension.verdict : "unknown";
+            const refs = Array.isArray(dimension.evidence_refs) ? dimension.evidence_refs : [];
+            return (
+              <li key={`${report.job_id}-dimension-${index}`}>
+                <span className={`admin-review-badge verdict-${verdict}`}>{verdict}</span>
+                <strong>{String(dimension.dimension ?? "dimension")}</strong>
+                <span>{String(dimension.reason ?? "")}</span>
+                {refs.length ? (
+                  <span className="admin-review-muted">证据：{refs.join("，")}</span>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      ) : null}
+      {typeof report.report.notes === "string" && report.report.notes ? (
+        <p className="admin-review-muted">{report.report.notes}</p>
+      ) : null}
+    </details>
   );
 }
 
