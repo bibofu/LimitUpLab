@@ -73,6 +73,7 @@ function renderApp(path: string, states: unknown[], overrides: Record<string, un
     "./components/ReviewDashboard": review,
     "./components/StockResearchPanels": stockResearch,
     "./pages/PremarketPage": premarket,
+    "./pages/AdminReviewPage": { AdminReviewPage: () => null },
     "./hooks/useRecommendationIntelligence": recommendationIntelligence,
     "./hooks/useReviewReport": reviewReport,
     "./components/MarketKLineChart": {},

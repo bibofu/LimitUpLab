@@ -1,9 +1,21 @@
 import { streamChat, streamExistingRun, type AgentStreamOptions } from "./utils/agentChatTransport";
 import { streamReviewOverview, type ReviewOverviewEvent } from "./utils/reviewOverviewStream";
 import { loadChatBootstrap } from "./utils/chatBootstrap";
-import { DASHBOARD_TIMEOUT_MS, GET_TIMEOUT_MS, requestJson } from "./utils/jsonRequest";
+import { DASHBOARD_TIMEOUT_MS, GET_TIMEOUT_MS, HttpResponseError, requestJson } from "./utils/jsonRequest";
 import type { ConsolidationPool } from "./consolidation";
 import type { AnswerFeedbackPayload } from "./utils/answerFeedback";
+import type {
+  ReviewCaseDetail,
+  ReviewCaseUpdate,
+  ReviewCasesResponse,
+  ReviewDrainResponse,
+  ReviewFeedbackResponse,
+  ReviewJobsResponse,
+  ReviewSampleResponse,
+  ReviewSeverity,
+  ReviewSource,
+  ReviewStatus,
+} from "./reviewTypes";
 import type {
   AgentChatRequest,
   AgentChatStreamEvent,
@@ -409,5 +421,99 @@ export function deleteAnswerFeedback(runId: string) {
     `/api/agents/chat/runs/${encodeURIComponent(runId)}/feedback`,
     { method: "DELETE" },
   );
+}
+
+function adminHeaders(adminKey: string): Record<string, string> {
+  return { "X-LimitUpLab-Admin-Key": adminKey };
+}
+
+export function fetchReviewCases(
+  adminKey: string,
+  filters: {
+    status?: ReviewStatus | "";
+    source?: ReviewSource | "";
+    severity?: ReviewSeverity | "";
+    limit?: number;
+  } = {},
+) {
+  const params = new URLSearchParams();
+  if (filters.status) params.set("status", filters.status);
+  if (filters.source) params.set("source", filters.source);
+  if (filters.severity) params.set("severity", filters.severity);
+  if (filters.limit) params.set("limit", String(filters.limit));
+  const query = params.toString();
+  return request<ReviewCasesResponse>(
+    `/api/admin/review/cases${query ? `?${query}` : ""}`,
+    { headers: adminHeaders(adminKey), cache: "no-store" },
+  );
+}
+
+export function fetchReviewCase(adminKey: string, caseId: string) {
+  return request<ReviewCaseDetail>(
+    `/api/admin/review/cases/${encodeURIComponent(caseId)}`,
+    { headers: adminHeaders(adminKey), cache: "no-store" },
+  );
+}
+
+export function updateReviewCase(
+  adminKey: string,
+  caseId: string,
+  update: ReviewCaseUpdate,
+) {
+  return request<ReviewCaseDetail>(
+    `/api/admin/review/cases/${encodeURIComponent(caseId)}`,
+    {
+      method: "PATCH",
+      headers: { ...adminHeaders(adminKey), "Content-Type": "application/json" },
+      body: JSON.stringify(update),
+    },
+  );
+}
+
+export function fetchReviewFeedback(adminKey: string, limit = 50) {
+  return request<ReviewFeedbackResponse>(
+    `/api/admin/review/feedback?limit=${limit}`,
+    { headers: adminHeaders(adminKey), cache: "no-store" },
+  );
+}
+
+export function fetchReviewJobs(adminKey: string, limit = 50) {
+  return request<ReviewJobsResponse>(
+    `/api/admin/review/jobs?limit=${limit}`,
+    { headers: adminHeaders(adminKey), cache: "no-store" },
+  );
+}
+
+export function drainReviewJobs(adminKey: string, limit = 10) {
+  return request<ReviewDrainResponse>(
+    `/api/admin/review/jobs/drain?limit=${limit}`,
+    { method: "POST", headers: adminHeaders(adminKey) },
+    60_000,
+  );
+}
+
+export function sampleReviewRuns(adminKey: string, limit = 5) {
+  return request<ReviewSampleResponse>(
+    `/api/admin/review/sample?limit=${limit}`,
+    { method: "POST", headers: adminHeaders(adminKey) },
+    60_000,
+  );
+}
+
+/** Fetch the Markdown export as plain text instead of the JSON request helper. */
+export async function exportReviewCase(adminKey: string, caseId: string): Promise<string> {
+  const response = await fetch(
+    `${API_BASE_URL}/api/admin/review/cases/${encodeURIComponent(caseId)}/export`,
+    { credentials: "include", headers: adminHeaders(adminKey) },
+  );
+  if (!response.ok) {
+    let message = `请求失败（${response.status} ${response.statusText}）`;
+    try {
+      const payload = await response.json() as { detail?: unknown };
+      if (typeof payload.detail === "string" && payload.detail.trim()) message = payload.detail.trim();
+    } catch { /* Keep the HTTP status message. */ }
+    throw new HttpResponseError(response.status, message);
+  }
+  return response.text();
 }
 
