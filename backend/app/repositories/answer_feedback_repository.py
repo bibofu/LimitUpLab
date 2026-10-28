@@ -104,6 +104,39 @@ class AnswerFeedbackRepository:
             )
             return result.rowcount > 0
 
+    def list_recent(self, limit: int = 50) -> list[dict]:
+        """Return recent votes with a bounded question preview for administrators."""
+
+        with connect(self.database_url) as connection:
+            initialize_database(connection)
+            rows = connection.execute(
+                """
+                SELECT feedback.run_id, feedback.vote, feedback.reasons_json,
+                       feedback.comment, feedback.updated_at,
+                       run.session_id, run.request_json, run.response_json
+                FROM answer_feedback AS feedback
+                JOIN react_runs AS run ON run.run_id = feedback.run_id
+                ORDER BY feedback.updated_at DESC
+                LIMIT ?
+                """,
+                (max(1, min(int(limit), 200)),),
+            ).fetchall()
+        result = []
+        for row in rows:
+            request = _decode_object(row["request_json"])
+            response = _decode_object(row["response_json"])
+            result.append({
+                "run_id": row["run_id"],
+                "session_id": row["session_id"],
+                "vote": row["vote"],
+                "reasons": _decode_list(row["reasons_json"]),
+                "comment": row["comment"] or "",
+                "question_preview": _one_line(str(request.get("message") or ""))[:120],
+                "task_status": response.get("task_status"),
+                "updated_at": _as_datetime(row["updated_at"]),
+            })
+        return result
+
     def summary(self, days: int = 7) -> AnswerFeedbackSummary:
         """Aggregate vote ratio, coverage and reasons for one period."""
 
@@ -191,6 +224,26 @@ def _as_datetime(value) -> datetime:
     if isinstance(value, datetime):
         return value
     return datetime.fromisoformat(str(value))
+
+
+def _decode_object(value: str | None) -> dict:
+    try:
+        decoded = json.loads(value or "{}")
+    except (TypeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _decode_list(value: str | None) -> list:
+    try:
+        decoded = json.loads(value or "[]")
+    except (TypeError, ValueError):
+        return []
+    return decoded if isinstance(decoded, list) else []
+
+
+def _one_line(value: str) -> str:
+    return " ".join(value.split()).strip()
 
 
 def _ratio(numerator: int, denominator: int) -> float | None:

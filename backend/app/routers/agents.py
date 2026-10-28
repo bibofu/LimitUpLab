@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import logging
 import os
 from datetime import date, datetime, timezone
 from datetime import timedelta
@@ -90,6 +91,7 @@ from app.services.scoring_policy_optimizer import (
     optimize_scoring_policy,
 )
 from app.services.system_health import build_agent_system_health
+from app.services.review_signals import ReviewSignalService
 from app.security import current_owner_id, require_admin_access
 
 from app.routers.react_chat import router as react_chat_router
@@ -101,6 +103,7 @@ router.include_router(review_overview_router)
 ResponseModel = TypeVar("ResponseModel")
 STRUCTURED_CACHE_TTL_MINUTES = 10
 CHAT_SESSIONS_VERSION = "chat-sessions-v1"
+logger = logging.getLogger(__name__)
 
 
 def _begin_agent_request(
@@ -539,6 +542,19 @@ def save_answer_feedback(
             status_code=409,
             detail="Feedback requires a completed answer.",
         ) from None
+    if feedback.vote == "down":
+        try:
+            ReviewSignalService().record_downvote(
+                run_id=run_id,
+                owner_id=owner_id,
+                reasons=list(payload.reasons),
+                comment=payload.comment,
+                feedback_updated_at=feedback.updated_at,
+            )
+        except Exception as error:  # noqa: BLE001 - review evidence must not fail the vote
+            logger.warning(
+                "review_downvote_signal_failed error_type=%s", type(error).__name__,
+            )
     return AnswerFeedbackResponse(feedback=feedback)
 
 

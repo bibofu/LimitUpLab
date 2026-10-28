@@ -163,6 +163,36 @@ def test_deleting_a_session_removes_its_feedback(postgresql_database):
     assert remaining["count"] == 0
 
 
+def test_downvote_http_records_one_review_signal(postgresql_database):
+    owner = _owner("9")
+    run_id = _completed_run(owner, "feedback-signal-session")
+    with TestClient(app) as client:
+        client.cookies.set(SESSION_COOKIE_NAME, sign_visitor_owner_id(owner))
+        response = client.put(
+            f"/api/agents/chat/runs/{run_id}/feedback",
+            json={"vote": "down", "reasons": ["data_error"], "comment": "数字不对"},
+        )
+        assert response.status_code == 200
+        client.put(
+            f"/api/agents/chat/runs/{run_id}/feedback",
+            json={"vote": "up"},
+        )
+
+    with connect() as connection:
+        rows = connection.execute(
+            """
+            SELECT kind, severity, detector
+            FROM answer_review_signals
+            WHERE run_id=?
+            """,
+            (run_id,),
+        ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["kind"] == "downvote"
+    assert rows[0]["severity"] == "high"
+    assert rows[0]["detector"] == "answer_feedback"
+
+
 def test_feedback_summary_and_admin_endpoint(postgresql_database, monkeypatch):
     up_owner = _owner("e")
     down_owner = _owner("f")
