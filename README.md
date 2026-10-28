@@ -262,6 +262,7 @@ LimitUpLab/
     ├── V1.4_Milestone.md    # V1.4 历史发布边界与验证记录
     ├── LangChain_Integration.md # 当前 ReAct 架构说明
     ├── Memory_Implementation.md # 短期/长期记忆实现细节
+    ├── Online_Observability_and_Badcase.md # 在线反馈、抽样、人工审核与观测口径
     └── code-quality-audit.md # 阶段性代码质量审查
 ```
 
@@ -311,7 +312,7 @@ DEEPSEEK_API_KEY=<your-api-key>
 
 真实 API Key 不应提交到 Git。未配置 LLM 时，结构化评分、数据检索等确定性接口仍可运行；生产聊天 ReAct 会明确报配置错误，不会伪装成正常回答。
 
-公开运行时建议同时配置 Agent 容量。默认每访客 8 次/分钟、60 次/天、同访客 1 个并发、全站 4 个并发。管理接口 `GET /api/agents/usage?days=7` 可查看请求、拒绝、LLM 调用和 token 汇总，需要 `X-LimitUpLab-Admin-Key`。
+公开运行时建议同时配置 Agent 容量。默认每访客 8 次/分钟、60 次/天、同访客 1 个并发、全站 4 个并发。管理接口 `GET /api/agents/usage?days=7` 可查看请求、拒绝、LLM 调用和 token 汇总，`GET /api/agents/feedback/summary?days=7` 可查看点赞率、反馈覆盖率和点踩原因，均需要 `X-LimitUpLab-Admin-Key`。回答底部的点赞/点踩只保存当前访客对该 run 的一票；改票覆盖、撤销删除，投票不会进入聊天推理链路。审核队列、抽样检查和 LLM Judge 的分期方案与指标口径见 [在线反馈与 Badcase 回收](docs/Online_Observability_and_Badcase.md)。
 
 ```dotenv
 LIMITUPLAB_AGENT_RATE_LIMIT_ENABLED=true
@@ -511,6 +512,10 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `GET` | `/api/agents/chat/sessions/{session_id}` | 恢复会话消息和回答元数据 |
 | `PATCH` | `/api/agents/chat/sessions/{session_id}` | 重命名会话 |
 | `DELETE` | `/api/agents/chat/sessions/{session_id}` | 永久删除会话、消息和关联运行记录 |
+| `GET` | `/api/agents/chat/runs/{run_id}/feedback` | 查询当前访客对一条回答的投票 |
+| `PUT` | `/api/agents/chat/runs/{run_id}/feedback` | 保存或替换点赞/点踩及原因 |
+| `DELETE` | `/api/agents/chat/runs/{run_id}/feedback` | 撤销当前访客的投票 |
+| `GET` | `/api/agents/feedback/summary` | 投票比例、覆盖率和原因汇总（管理员） |
 | `POST` | `/api/agents/chat` | 同步 Agent 问答 |
 | `POST` | `/api/agents/chat/stream` | SSE 流式 Agent 问答 |
 | `GET` | `/api/limit-up/events` | 涨停事件查询 |
