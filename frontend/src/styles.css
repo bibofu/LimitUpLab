@@ -825,7 +825,7 @@ td span {
 }
 
 .answer-feedback-actions .answer-feedback-vote {
-  min-width: 44px;
+  min-width: 22px;
   min-height: 38px;
   justify-content: center;
   padding: 0;
