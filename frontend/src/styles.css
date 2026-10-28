@@ -787,9 +787,9 @@ td span {
 
 .answer-feedback {
   display: grid;
-  gap: 8px;
-  margin-top: 4px;
-  padding-top: 10px;
+  gap: 6px;
+  margin-top: 2px;
+  padding-top: 6px;
   border-top: 1px solid #e9edf2;
   color: #6b7280;
   font-size: 12px;
@@ -826,7 +826,7 @@ td span {
 
 .answer-feedback-actions .answer-feedback-vote {
   min-width: 22px;
-  min-height: 38px;
+  min-height: 28px;
   justify-content: center;
   padding: 0;
   border: 0;
