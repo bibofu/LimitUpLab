@@ -319,10 +319,59 @@ class ReviewJobService:
                 self._fail_job(job, error)
             processed += 1
         aggregated = self.cases.aggregate_signals(limit=100)
+        self.cleanup_retention()
         return {
             "sampled_runs": sampled,
             "processed_jobs": processed,
             "aggregated_signals": aggregated,
+        }
+
+    def cleanup_retention(self) -> dict[str, int]:
+        """Delete aged terminal review data while keeping open cases."""
+
+        settings = review_settings()
+        cutoff = datetime.now(timezone.utc) - timedelta(days=settings.retention_days)
+        with closing(connect(self.database_url)) as db:
+            initialize_database(db)
+            begin_write(db)
+            feedback = db.execute(
+                "DELETE FROM answer_feedback WHERE updated_at < ?",
+                (cutoff,),
+            )
+            cases = db.execute(
+                """
+                DELETE FROM answer_review_cases
+                WHERE status IN ('closed','dismissed','insufficient')
+                  AND updated_at < ?
+                """,
+                (cutoff,),
+            )
+            signals = db.execute(
+                """
+                DELETE FROM answer_review_signals AS signal
+                WHERE signal.created_at < ?
+                  AND NOT EXISTS (
+                      SELECT 1 FROM answer_review_cases AS case_row
+                      WHERE case_row.case_id = signal.case_id
+                        AND case_row.status NOT IN ('closed','dismissed','insufficient')
+                  )
+                """,
+                (cutoff,),
+            )
+            jobs = db.execute(
+                """
+                DELETE FROM answer_review_jobs
+                WHERE status IN ('succeeded','skipped','failed')
+                  AND finished_at < ?
+                """,
+                (cutoff,),
+            )
+            db.commit()
+        return {
+            "feedback": int(feedback.rowcount),
+            "cases": int(cases.rowcount),
+            "signals": int(signals.rowcount),
+            "jobs": int(jobs.rowcount),
         }
 
     def list_jobs(self, *, status: str | None = None, limit: int = 50) -> list[ReviewJob]:
