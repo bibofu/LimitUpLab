@@ -178,10 +178,12 @@ new → confirmed → fixing → verifying → closed
 | 点赞率 | `up / (up + down)`；同时展示反馈覆盖率和每百次回答点踩数 |
 | 点踩原因 | 按原因标签聚合 Top N |
 | 抽检覆盖率 | 已抽检 run / 回答量 |
-| Judge | `pass/fail/unknown` 分别计数；失败率分母排除 unknown，小样本附 Wilson 区间 |
+| Judge | 调用、成功/错误、token、估算成本；逐维结论保存在案例报告，不在看板汇总为发布门禁 |
 | 案例 | 新增、待处理、确认、驳回数量；首次处理时长和关闭时长 |
 | 延迟 | `duration_ms` 的 p50 / p95 |
 | Judge 成本 | 每日调用数、token、估算成本、占聊天成本比例 |
+
+实现为 `GET /api/admin/observability/summary?days=7`，按上海日生成每日桶和周期汇总。看板不缓存指标，直接读取 PostgreSQL；`notes` 字段返回口径限制并在页面展示。worker 按 `LIMITUPLAB_REVIEW_RETENTION_DAYS` 清理旧反馈、终态案例及其信号和已完成任务，未关闭案例保留；Langfuse 开启时投票以 `answer_feedback` score 尽力镜像。
 
 ## API 与界面
 

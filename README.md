@@ -316,6 +316,8 @@ DEEPSEEK_API_KEY=<your-api-key>
 
 管理员审核台位于隐藏路由 `/admin/observability`，不进入公共导航；密钥只保存在页面内存。点踩会写入追加型信号，`review-worker` 把信号聚合为每个 run 唯一的案例，并按配置抽样正常回答。审核结论使用修订号防并发覆盖，导出内容沿用 `badCase.md` 格式且不含 owner 标识。worker 还会对最近完成的回答执行确定性契约检查（错误、数字无工具证据、部分完成未披露缺口、合规措辞等），失败信号进入案例；LLM Judge 默认关闭，人工标注集位于 `backend/evals/answer_review_cases.json`，校准方式为 `backend\.venv\Scripts\python.exe backend\scripts\evaluate_answer_review.py`，逐维 kappa 达到 0.6 且样本足够后再开启。
 
+审核台“概览”页按上海日展示请求量、回答量、独立访客、token、估算成本、点赞率、反馈覆盖、延迟、案例和 Judge 成本；管理接口为 `GET /api/admin/observability/summary`。看板明确标注匿名 cookie 去重、token 仅统计完整测量、成本为估算值等口径。worker 会按 `LIMITUPLAB_REVIEW_RETENTION_DAYS`（默认 180 天）清理旧反馈、已关闭/驳回案例及其信号和已完成任务，未关闭案例不会被自动删除；Langfuse 开启时投票会以 `answer_feedback` score 尽力镜像，失败不影响反馈。
+
 ```dotenv
 LIMITUPLAB_AGENT_RATE_LIMIT_ENABLED=true
 LIMITUPLAB_AGENT_REQUESTS_PER_MINUTE=8
@@ -524,6 +526,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `GET` | `/api/admin/review/cases/{case_id}/export` | 导出 badCase.md 片段（管理员） |
 | `GET` | `/api/admin/review/feedback` | 最近点赞/点踩明细（管理员） |
 | `GET` | `/api/admin/review/jobs` | 抽样与检查任务状态（管理员） |
+| `GET` | `/api/admin/observability/summary` | 请求、回答、token、成本、反馈、案例和 Judge 汇总（管理员） |
 | `POST` | `/api/admin/review/jobs/drain` | 有界处理一批任务（管理员） |
 | `POST` | `/api/admin/review/sample` | 手动补充抽样（管理员） |
 | `POST` | `/api/admin/review/runs/{run_id}/recheck` | 重新排队确定性检查与已启用的 Judge（管理员） |
