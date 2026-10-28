@@ -89,7 +89,7 @@ export function AnswerFeedback({
           disabled={pending}
           onClick={() => vote("up")}
         >
-          <ThumbsUp size={14} aria-hidden="true" />
+          <ThumbsUp size={12} aria-hidden="true" />
         </button>
         <button
           type="button"
@@ -99,7 +99,7 @@ export function AnswerFeedback({
           disabled={pending}
           onClick={() => vote("down")}
         >
-          <ThumbsDown size={14} aria-hidden="true" />
+          <ThumbsDown size={12} aria-hidden="true" />
         </button>
       </div>
       {expanded ? (
