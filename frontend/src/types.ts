@@ -556,7 +556,19 @@ export interface ChatSessionMessage {
   status: "success" | "error";
   run_id: string | null;
   metadata: Record<string, unknown>;
+  feedback?: AnswerFeedbackValue | null;
   created_at: string;
+}
+
+export type AnswerFeedbackVote = "up" | "down";
+
+export interface AnswerFeedbackValue {
+  run_id: string;
+  vote: AnswerFeedbackVote;
+  reasons: string[];
+  comment: string;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface ChatSessionSummary {

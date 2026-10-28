@@ -785,6 +785,100 @@ td span {
   animation: chat-progress-spin 1s linear infinite;
 }
 
+.answer-feedback {
+  display: grid;
+  gap: 6px;
+  margin-top: 2px;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.answer-feedback-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.answer-feedback-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: #6b7280;
+  font: inherit;
+  cursor: pointer;
+}
+
+.answer-feedback-actions button:hover:not(:disabled) {
+  background: #f1f5f9;
+  color: #374151;
+}
+
+.answer-feedback-actions button[aria-pressed="true"] {
+  border-color: #cbd5e1;
+  background: #eef2f7;
+  color: #1f2937;
+}
+
+.answer-feedback-actions button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.answer-feedback-retract {
+  font-size: 11px;
+}
+
+.answer-feedback fieldset {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 10px;
+  border: 1px solid #e9edf2;
+  border-radius: 6px;
+  background: #fbfcfd;
+}
+
+.answer-feedback legend {
+  padding: 0 4px;
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.answer-feedback-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.answer-feedback-reasons label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #475569;
+  font-size: 12px;
+}
+
+.answer-feedback textarea {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 8px;
+  border: 1px solid #dbe2ea;
+  border-radius: 4px;
+  background: #ffffff;
+  color: #374151;
+  font: inherit;
+  font-size: 12px;
+  resize: vertical;
+}
+
+.answer-feedback [role="alert"] {
+  color: #b42318;
+}
+
 .chat-markdown > :first-child {
   margin-top: 0;
 }

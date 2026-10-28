@@ -101,6 +101,7 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
     "./AgentAnswerMarkdown": markdownModule.exports,
     "./AgentDisplayBlocks": { AgentDisplayBlocks: () => null },
     "./AgentChatProgress": { AgentChatProgress: () => null },
+    "./AnswerFeedback": { AnswerFeedback: () => null },
   };
   const module = { exports: {} as any };
   new Function("require", "module", "exports", compiled)((id: string) => imports[id] ?? require(id), module, module.exports);

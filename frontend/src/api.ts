@@ -3,12 +3,14 @@ import { streamReviewOverview, type ReviewOverviewEvent } from "./utils/reviewOv
 import { loadChatBootstrap } from "./utils/chatBootstrap";
 import { DASHBOARD_TIMEOUT_MS, GET_TIMEOUT_MS, requestJson } from "./utils/jsonRequest";
 import type { ConsolidationPool } from "./consolidation";
+import type { AnswerFeedbackPayload } from "./utils/answerFeedback";
 import type {
   AgentChatRequest,
   AgentChatStreamEvent,
   AgentChatStreamResult,
   AgentRunCommand,
   AgentRunState,
+  AnswerFeedbackValue,
   ChatSessionDetail,
   ChatSessionsResponse,
   DailyBoardPromotionReport,
@@ -385,6 +387,27 @@ export function controlAgentChatRun(runId: string, action: "pause" | "resume", c
 export function cancelAgentChatRun(runId: string) {
   return request<{ run_id: string; cancel_requested: boolean }>(
     `/api/agents/chat/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" },
+  );
+}
+
+/** Persist or replace the visitor's verdict for one completed answer. */
+export async function saveAnswerFeedback(runId: string, payload: AnswerFeedbackPayload) {
+  const result = await request<{ feedback: AnswerFeedbackValue | null }>(
+    `/api/agents/chat/runs/${encodeURIComponent(runId)}/feedback`,
+    {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    },
+  );
+  return result.feedback;
+}
+
+/** Retract the visitor's verdict without deleting the answer. */
+export function deleteAnswerFeedback(runId: string) {
+  return request<{ deleted: boolean }>(
+    `/api/agents/chat/runs/${encodeURIComponent(runId)}/feedback`,
+    { method: "DELETE" },
   );
 }
 

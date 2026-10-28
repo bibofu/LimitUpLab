@@ -39,6 +39,7 @@ import type {
   AgentStockMention,
   AgentRunCommand,
   AgentRunState,
+  AnswerFeedbackValue,
   ChatSessionDetail,
   ChatSessionMessage,
   ChatSessionSummary,
@@ -46,6 +47,7 @@ import type {
 import { AgentAnswerMarkdown } from "./AgentAnswerMarkdown";
 import { AgentChatProgress } from "./AgentChatProgress";
 import { AgentDisplayBlocks } from "./AgentDisplayBlocks";
+import { AnswerFeedback } from "./AnswerFeedback";
 import { taskStatusLabel } from "../utils/agentChatTransport";
 import { HttpResponseError } from "../utils/jsonRequest";
 import {
@@ -66,6 +68,7 @@ interface ChatMessage {
   status?: "success" | "error";
   suggestedQuestions?: string[];
   taskLabel?: string;
+  feedback?: AnswerFeedbackValue | null;
 }
 
 const ACTIVE_CHAT_SESSION_STORAGE_KEY = "limituplab.activeChatSession";
@@ -164,6 +167,7 @@ function restoredChatMessage(message: ChatSessionMessage): ChatMessage {
     status: message.status,
     suggestedQuestions: stringArray(message.metadata.suggested_questions),
     taskLabel: taskStatusLabel(message.metadata.task_status),
+    feedback: message.feedback ?? null,
   };
 }
 
@@ -914,20 +918,25 @@ export function AgentChatDock({
               key={item.id}
             >
               {item.role === "agent" ? (
-                <div className="chat-markdown">
-                  {item.taskLabel ? <small className="chat-task-status">
-                    {item.taskLabel}
-                  </small> : null}
-                  <AgentAnswerMarkdown
-                    content={item.content}
-                    stockMentions={item.stockMentions}
-                    animate={revealingMessageId === item.id}
-                    suppressTables={Boolean(item.displayBlocks?.length)}
-                    duplicateListLabels={displayDuplicateListLabels(item.displayBlocks)}
-                    onRevealProgress={followRevealedAnswer}
-                  />
-                  <AgentDisplayBlocks blocks={item.displayBlocks} />
-                </div>
+                <>
+                  <div className="chat-markdown">
+                    {item.taskLabel ? <small className="chat-task-status">
+                      {item.taskLabel}
+                    </small> : null}
+                    <AgentAnswerMarkdown
+                      content={item.content}
+                      stockMentions={item.stockMentions}
+                      animate={revealingMessageId === item.id}
+                      suppressTables={Boolean(item.displayBlocks?.length)}
+                      duplicateListLabels={displayDuplicateListLabels(item.displayBlocks)}
+                      onRevealProgress={followRevealedAnswer}
+                    />
+                    <AgentDisplayBlocks blocks={item.displayBlocks} />
+                  </div>
+                  {item.runId ? (
+                    <AnswerFeedback runId={item.runId} initial={item.feedback} />
+                  ) : null}
+                </>
               ) : (
                 <p>{item.content}</p>
               )}
