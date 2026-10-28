@@ -42,19 +42,39 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
-      - name: Start isolated PostgreSQL on Linux
+      - name: Install pgvector and start isolated PostgreSQL on Linux
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y postgresql
           PG_BIN=$(find /usr/lib/postgresql -path '*/bin/initdb' | sort -V | tail -1)
-          python backend/scripts/provision_test_postgresql.py start --bin-dir "$(dirname "$PG_BIN")"
-      - name: Start isolated PostgreSQL on Windows
+          PG_BIN_DIR=$(dirname "$PG_BIN")
+          PG_MAJOR=$("$PG_BIN_DIR/postgres" --version | cut -d ' ' -f 3 | cut -d . -f 1)
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y "postgresql-${PG_MAJOR}-pgvector"
+          python backend/scripts/provision_test_postgresql.py start --bin-dir "$PG_BIN_DIR"
+      - name: Install pgvector and start isolated PostgreSQL on Windows
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $pgInit = Get-ChildItem 'C:\Program Files\PostgreSQL\*\bin\initdb.exe' | Sort-Object FullName -Descending | Select-Object -First 1
+          $pgInit = Get-ChildItem 'C:\Program Files\PostgreSQL\*\bin\initdb.exe' | Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
           if (-not $pgInit) { throw 'PostgreSQL binaries are required by the test matrix' }
+          $env:PGROOT = $pgInit.Directory.Parent.FullName
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vsPath = & $vswhere -latest -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath | Select-Object -First 1
+          if (-not $vsPath) { throw 'Visual Studio x64 C++ tools are required to build pgvector' }
+          $vcvars = Join-Path $vsPath 'VC\Auxiliary\Build\vcvars64.bat'
+          if (-not (Test-Path -LiteralPath $vcvars)) { throw 'Visual Studio x64 environment script is missing' }
+          $pgvectorSource = Join-Path $env:RUNNER_TEMP 'limituplab-pgvector-v0.8.7'
+          git clone --depth 1 --branch v0.8.7 https://github.com/pgvector/pgvector.git $pgvectorSource
+          if ($LASTEXITCODE -ne 0) { throw 'Cannot fetch the pinned pgvector source' }
+          Push-Location -LiteralPath $pgvectorSource
+          try {
+            cmd.exe /d /s /c "call `"$vcvars`" && nmake /NOLOGO /F Makefile.win && nmake /NOLOGO /F Makefile.win install"
+            if ($LASTEXITCODE -ne 0) { throw 'pgvector compilation or installation failed' }
+          } finally {
+            Pop-Location
+          }
           python backend/scripts/provision_test_postgresql.py start --bin-dir $pgInit.Directory.FullName
       - name: Run shared acceptance gates
         run: python scripts/check_project.py

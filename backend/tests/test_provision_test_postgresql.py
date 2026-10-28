@@ -83,6 +83,36 @@ def test_disposable_cluster_overrides_shared_socket_and_uses_loopback_tcp(dispos
     assert "@127.0.0.1:56432/limituplab_test" in exported
 
 
+def test_provision_requires_vector_in_the_disposable_database(disposable_start):
+    _cluster, _listener, runner, _initialize = disposable_start
+    provision.main()
+    checks = [call.args for call in runner.call_args_list if call.args[1] == "psql"]
+    assert len(checks) == 1
+    assert checks[0][2:] == (
+        "-X", "-h", "127.0.0.1", "-p", "56432", "-U", "limituplab_test",
+        "-d", "limituplab_test", "-v", "ON_ERROR_STOP=1", "-c",
+        "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public",
+    )
+
+
+def test_missing_vector_keeps_cleanup_state_without_exporting_test_url(disposable_start, tmp_path):
+    cluster, _listener, runner, initialize = disposable_start
+    failure = subprocess.CalledProcessError(1, "psql")
+
+    def missing_extension(bin_dir, name, *arguments):
+        initialize(bin_dir, name, *arguments)
+        if name == "psql":
+            raise failure
+
+    runner.side_effect = missing_extension
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        provision.main()
+    assert raised.value is failure
+    assert (cluster / "cluster.json").is_file()
+    assert not (tmp_path / "environment").exists()
+    assert not (tmp_path / "path").exists()
+
+
 @pytest.mark.parametrize("failure", [
     subprocess.CalledProcessError(1, "pg_ctl"), subprocess.TimeoutExpired("pg_ctl", 90),
 ])

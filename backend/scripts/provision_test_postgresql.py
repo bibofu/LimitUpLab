@@ -72,6 +72,10 @@ def main() -> None:
         raise
     state_path.write_text(json.dumps({"bin_dir": str(bin_dir)}), encoding="utf-8")
     run(bin_dir, "createdb", "-h", "127.0.0.1", "-p", str(port), "-U", "limituplab_test", "limituplab_test")
+    # Fail at provisioning, before exporting the URL, if the selected server lacks pgvector.
+    run(bin_dir, "psql", "-X", "-h", "127.0.0.1", "-p", str(port), "-U", "limituplab_test",
+        "-d", "limituplab_test", "-v", "ON_ERROR_STOP=1", "-c",
+        "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public")
     url = f"postgresql+psycopg://limituplab_test@127.0.0.1:{port}/limituplab_test"
     with Path(github_env).open("a", encoding="utf-8") as environment:
         environment.write(f"LIMITUPLAB_TEST_DATABASE_URL={url}\n")
