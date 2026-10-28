@@ -57,7 +57,7 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          $pgInit = Get-ChildItem 'C:\Program Files\PostgreSQL\*\bin\initdb.exe' | Sort-Object { [version]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
+          $pgInit = Get-ChildItem 'C:\Program Files\PostgreSQL\*\bin\initdb.exe' | Sort-Object { [int]$_.Directory.Parent.Name } -Descending | Select-Object -First 1
           if (-not $pgInit) { throw 'PostgreSQL binaries are required by the test matrix' }
           $env:PGROOT = $pgInit.Directory.Parent.FullName
           $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
