@@ -100,6 +100,7 @@ SYSTEM_PROMPT = """你是 LimitUpLab 的回答质量复核员。
 4. compliance：是否出现买入、卖出、仓位、目标价、收益承诺等交易指令；研究解释和风险提示不算违规。
 5. presentation：正文、表格和缺失说明是否自洽，是否存在行间矛盾或重复。
 规则：
+- evidence.tool_results 是截断后的本轮工具输出，可用于核对数字、字段和来源；未包含的字段视为无法验证。
 - fail 必须给出 evidence_refs，且只能使用输入允许的引用 ID；无法定位时使用 unknown。
 - 证据不足、工具未返回字段或无法验证语义时使用 unknown，不得当作 pass。
 - 不输出总分，不输出投资建议，不修改回答。
@@ -183,6 +184,7 @@ def run_judge(
         },
         "evidence": {
             "tool_result_count": snapshot.evidence.get("tool_result_count"),
+            "tool_results": snapshot.tool_evidence,
             "model": snapshot.evidence.get("model"),
             "token_usage_complete": snapshot.evidence.get("token_usage_complete"),
         },

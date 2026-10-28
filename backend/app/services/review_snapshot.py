@@ -10,6 +10,8 @@ from typing import Any
 
 MAX_QUESTION_CHARS = 2000
 MAX_ANSWER_CHARS = 20000
+MAX_TOOL_EXCERPT_CHARS = 3000
+MAX_TOOL_EVIDENCE_CHARS = 12000
 
 
 @dataclass(frozen=True)
@@ -25,6 +27,7 @@ class RunSnapshot:
     task_status: str | None
     trace_url: str | None
     evidence: dict[str, Any] = field(default_factory=dict)
+    tool_evidence: list[dict[str, Any]] = field(default_factory=list)
 
 
 def load_run_snapshot(connection, run_id: str) -> RunSnapshot | None:
@@ -94,4 +97,39 @@ def load_run_snapshot(connection, run_id: str) -> RunSnapshot | None:
         task_status=response.get("task_status"),
         trace_url=response.get("trace_url"),
         evidence=evidence,
+        tool_evidence=_tool_excerpts(tool_results),
     )
+
+
+def _tool_excerpts(tool_results: Any) -> list[dict[str, Any]]:
+    """Keep bounded tool output for the judge; never empty the field silently."""
+
+    if not isinstance(tool_results, list):
+        return []
+    excerpts: list[dict[str, Any]] = []
+    remaining = MAX_TOOL_EVIDENCE_CHARS
+    for item in tool_results[:20]:
+        if not isinstance(item, dict) or remaining <= 0:
+            continue
+        try:
+            text = json.dumps(
+                {
+                    "summary": item.get("summary"),
+                    "status": item.get("status"),
+                    "output": item.get("output"),
+                    "error": item.get("error"),
+                },
+                ensure_ascii=False,
+                default=str,
+            )
+        except (TypeError, ValueError):
+            text = str(item.get("summary") or "")
+        excerpt = text[: min(MAX_TOOL_EXCERPT_CHARS, remaining)]
+        remaining -= len(excerpt)
+        excerpts.append({
+            "tool": str(item.get("name") or "unknown"),
+            "status": item.get("status"),
+            "excerpt": excerpt,
+            "truncated": len(text) > len(excerpt),
+        })
+    return excerpts

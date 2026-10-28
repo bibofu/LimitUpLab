@@ -26,6 +26,7 @@ def snapshot(
     warnings: list[str] | None = None,
     intent: str = "market_summary",
     token_complete: bool = True,
+    tool_evidence: list[dict] | None = None,
 ) -> RunSnapshot:
     evidence = {
         "task_status": task_status,
@@ -45,6 +46,7 @@ def snapshot(
         task_status=task_status,
         trace_url=None,
         evidence=evidence,
+        tool_evidence=tool_evidence or [],
     )
 
 
@@ -75,6 +77,16 @@ class FakeProvider:
             total_tokens=150,
             response_mode="function_call",
         )
+
+
+class CapturingProvider(FakeProvider):
+    def __init__(self, content: str):
+        super().__init__(content)
+        self.prompt = ""
+
+    def generate_function_call(self, system_prompt, user_prompt, **kwargs):
+        self.prompt = user_prompt
+        return super().generate_function_call(system_prompt, user_prompt, **kwargs)
 
 
 def judge_json(fail_dimension: str | None = None, refs: list[str] | None = None) -> str:
@@ -143,6 +155,21 @@ def test_judge_accepts_evidence_backed_fail():
     assert outcome.report.dimensions[1].verdict == "fail"
     assert outcome.prompt_tokens == 100
     assert outcome.total_tokens == 150
+
+
+def test_judge_payload_includes_bounded_tool_excerpts():
+    provider = CapturingProvider(judge_json())
+    run_judge(
+        provider,
+        snapshot("最高标为测试股份。", tool_evidence=[{
+            "tool": "market_summary",
+            "status": "success",
+            "excerpt": "最高标=测试股份 000678，5 连板",
+            "truncated": False,
+        }]),
+    )
+    assert "最高标=测试股份 000678" in provider.prompt
+    assert "market_summary" in provider.prompt
 
 
 def test_judge_rejects_invented_or_missing_evidence():
