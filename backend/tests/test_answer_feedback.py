@@ -34,7 +34,7 @@ def _completed_run(owner: str, session_id: str) -> str:
     )
     with connect() as connection:
         connection.execute(
-            "UPDATE react_runs SET response_json=? WHERE run_id=?",
+            "UPDATE react_runs SET response_json=?, active=0, run_status='completed' WHERE run_id=?",
             ('{"answer":"研究回答","task_status":"complete"}', row["run_id"]),
         )
     return row["run_id"]
@@ -136,6 +136,23 @@ def test_feedback_http_round_trip_and_session_hydration(postgresql_database):
 
         after = client.get(f"/api/agents/chat/runs/{run_id}/feedback")
         assert after.json()["feedback"] is None
+
+
+def test_deleting_a_session_removes_its_feedback(postgresql_database):
+    owner = _owner("g")
+    session_id = "feedback-delete-session"
+    run_id = _completed_run(owner, session_id)
+    repository = AnswerFeedbackRepository()
+    repository.save(run_id, owner, AnswerFeedbackInput(vote="down"))
+
+    assert ChatSessionRepository().delete_session(session_id, owner_id=owner) is True
+
+    with connect() as connection:
+        remaining = connection.execute(
+            "SELECT COUNT(*) AS count FROM answer_feedback WHERE run_id=?",
+            (run_id,),
+        ).fetchone()
+    assert remaining["count"] == 0
 
 
 def test_feedback_summary_and_admin_endpoint(postgresql_database, monkeypatch):

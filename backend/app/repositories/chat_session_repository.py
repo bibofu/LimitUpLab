@@ -361,6 +361,17 @@ class ChatSessionRepository:
                     "DELETE FROM agent_runs WHERE session_id = ?",
                     (session_id,),
                 )
+                if table_exists(connection, "answer_feedback"):
+                    connection.execute(
+                        """
+                        DELETE FROM answer_feedback
+                        WHERE run_id IN (
+                            SELECT run_id FROM react_runs
+                            WHERE session_id = ? AND owner_id = ?
+                        )
+                        """,
+                        (session_id, owner_id),
+                    )
                 connection.execute(
                     "DELETE FROM chat_sessions WHERE session_id = ? AND owner_id = ?",
                     (session_id, owner_id),
