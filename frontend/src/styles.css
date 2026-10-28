@@ -829,19 +829,13 @@ td span {
 }
 
 .answer-feedback-actions .answer-feedback-vote {
-  min-width: 76px;
-  min-height: 36px;
+  min-width: 44px;
+  min-height: 38px;
   justify-content: center;
-  gap: 6px;
-  padding: 7px 14px;
+  padding: 0;
   border-color: #dbe2ea;
   background: #ffffff;
   color: #475569;
-  font-size: 12px;
-}
-
-.answer-feedback-actions .answer-feedback-vote span {
-  line-height: 1;
 }
 
 .answer-feedback-actions .answer-feedback-vote:hover:not(:disabled) {
@@ -854,7 +848,6 @@ td span {
   border-color: #1d4ed8;
   background: #eef4ff;
   color: #1d4ed8;
-  font-weight: 600;
 }
 
 .answer-feedback fieldset .answer-feedback-actions {

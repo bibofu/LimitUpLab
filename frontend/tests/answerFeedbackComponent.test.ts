@@ -51,7 +51,8 @@ test("a restored downvote renders its pressed state without a retract action", (
   assert.match(markup, /aria-label="回答反馈"/);
   assert.match(markup, /aria-label="点踩"/);
   assert.match(markup, /aria-pressed="true"/);
-  assert.match(markup, /点赞/);
+  assert.match(markup, /aria-label="点赞"/);
+  assert.doesNotMatch(markup, />点赞</);
   assert.doesNotMatch(markup, /撤销/);
 });
 
