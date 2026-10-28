@@ -22,6 +22,8 @@ def completed_run(
     question: str = "市场最高标是哪个",
     answer: str = "研究回答",
     task_status: str = "complete",
+    tool_calls: list[str] | None = None,
+    warnings: list[str] | None = None,
 ) -> str:
     ChatSessionRepository().create_session(session_id=session_id, owner_id=owner_id)
     row, _ = RunLifecycle().create(
@@ -36,8 +38,8 @@ def completed_run(
         "answer": answer,
         "task_status": task_status,
         "intent": "market_summary",
-        "tool_calls": ["market_summary", "limit_up_events"],
-        "warnings": [],
+        "tool_calls": tool_calls if tool_calls is not None else ["market_summary", "limit_up_events"],
+        "warnings": warnings or [],
         "trace_url": f"https://trace.example/{row['run_id']}",
     }
     with connect() as connection:
