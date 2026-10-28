@@ -1,5 +1,33 @@
 # Agent 问答回归记录
 
+## 2026-10-28：数据问题无本轮工具调用，生成旧数据/错误字段状态
+
+- 原表现：同一 20 问会话中，Q9“扩大到二十个交易日”的回答 `tool_calls=[]`，却给出 2026-09-28 起、收盘 10.20、10-14 收盘 11.98/最高 12.30、MA5 11.024、量比 1.87 等数字；与本地日线和上一轮 `stock_kline` 结果（20 日窗口应从 2026-09-22 起，MA5 10.824、量比 2.738）不一致。Q10 又把这些不存在的 -12.688%/-8.431% 称为“工具字段”。Q17 `tool_calls=[]`，称天娱数科买入额、卖出额、净买额、游资净买额、涨跌幅未提供；但上一轮 `dragon_tiger_list` 原始行包含这些字段，`limit_reason` 是字段存在但值为 null。
+- 原因：模型把压缩上下文/上一轮回答当成当前工具结果；没有强制“数据问题必须在本轮调用对应工具”；同时把“null 值”和“字段不存在”混淆。
+- 修复：新增 `app/agents/grounding.py` 的窄范围工具守卫。K 线/成交量/均线/回撤问题要求本轮 `stock_kline`，龙虎榜/上榜/席位问题要求 `dragon_tiger_list`，指数问题要求 `market_index_trend`；若回答含数字、状态非 clarify/refuse/cancelled/error、不是记忆命令或会话回顾，且本轮缺少对应工具，则在 `result_from_state` 返回 `partial/tool_evidence_required`，不发布旧数字。system prompt 同时补充“null 是字段值缺失，只有 field_definitions 不存在字段才能说工具不提供”。
+- 验证：真实复验 Q9 已调用 `stock_kline` 并返回 2026-09-22 起 20 条真实数据；Q17 已调用 `dragon_tiger_list`，返回 578,739,999.30 买入额、631,249,312.35 卖出额、-52,509,313.05 净买额等字段，并明确 `limit_reason=null`、无席位明细。新增 `tests/test_grounding.py`；后端全量 2069 passed、1 skipped、22 subtests passed。
+
+## 2026-10-28：会话回顾把早期轮次说成“未发生”，且最先详细股票错误
+
+- 原表现：Q19 称本会话没有比较过指数、最先详细研究的是天娱数科（002354）；Q20 修正了指数遗漏，但仍把 002354 当作最先详细研究的股票，并称 603037 只出现在研究清单。实际 Q7–Q13 才详细查询了凯众股份 603037，Q14–Q15 比较了三大指数。
+- 原因：Agent 当轮没有读取数据库或结构化会话索引，只依赖滚动摘要和最近窗口；早期轮次被压缩后，模型把“当前上下文未保留”说成“从未发生”。
+- 修复：新增 `app/agents/session_history.py`，在回顾类问题上构建最近 30 轮 `session_ledger` 和确定性 `session_facts`（最先详细研究股票、首个显式日期、比较指数、龙虎榜追问股票）；能由 facts 回答的回顾问题由 `_agent` 直接生成确定性答案，不再让模型从摘要猜历史。`build_context` 同时暴露 ledger/facts，并明确它们只是历史索引、不是当前行情证据。
+- 验证：真实复验“请回顾本会话：最先详细研究的股票、比较的三个指数、龙虎榜追问的股票”返回 `complete`，内容为凯众股份（603037）、上证指数/深证成指/创业板指、天娱数科（002354）。新增 `tests/test_session_history.py`；全量测试 2069 passed、22 subtests passed。
+
+## 2026-10-28：同一天的多分析范围被误澄清，表格顺序未用于“第一只”
+
+- 原表现：Q2 已明确 2026-10-27，Q3 说“沿用刚才这一天”，仍返回 `clarify/reference_ambiguous`；Q5 已展示首板评分表，Q6 问“上一张表的第一只”，仍要求用户重新提供代码。
+- 原因：Q2 的参考里有两个分析工具，`_resolve_analysis` 只要 `len(analyses)!=1` 就澄清，没有利用它们共同的 `as_of`；Q5 回答同时包含 Markdown 表格和说明性 bullet，`_displayed_order` 把两者都当成候选列表，返回 `ordinal_resolvable=false`。
+- 修复：多个分析范围若全部指向同一日期，只解析日期并返回 `analysis_scope=None`，由当前问题自行指定指标；不同日期仍澄清。`_displayed_order` 优先使用 Markdown 表格块，忽略同时出现的说明性 bullet；表格顺序由此进入 `ordered_symbols` 和 `ordinal_resolvable`。
+- 验证：真实复验 Q2→Q3 返回 `complete`，Q3 不再澄清并给出 56/69、28/69；Q5→Q6 返回 `complete`，Q6 解析到凯众股份 603037 并调用 `stock_profile`。新增 `tests/test_conversation_referents.py` 回归；全量测试 2069 passed。
+
+## 2026-10-28：多行指数汇总自相矛盾，并把已有字段说成未取到
+
+- 原表现：Q14 正文写上证上涨 2 天、下跌 2 天，末尾却写“三大指数均为 1 天上涨、3 天下跌”；Q15 修正了表格，但声称深证成指、创业板指首末收盘“本次未取到”，而 Q14 的 `market_index_trend` payload 已包含这些值。
+- 原因：模型把多行汇总写成单句概括，发生行间覆盖；同时对已返回字段作出“未取到”的错误状态判断。
+- 修复：system prompt 增加多行表格正文必须逐行一致、不同指数/股票不得写成“均为……”的约束；同时明确 null、字段缺失和摘要视图缺失的区别。未用正则改写回答。
+- 验证：真实复验 Q14/Q15 均返回 `complete`，Q15 表格包含三个指数起止收盘、涨跌幅、上涨/下跌天数和回撤，正文与表格一致。全量测试 2069 passed。
+
 ## 2026-10-26：v1 未开放 stock_financials，财报问题被路由到 stock_news
 
 - 原表现：同一会话先问“介绍一下贵州茅台”，再问“它最新的财务数据怎么样”。第三问 `run_888220b5fab84f7cadd1e7c5fe319f46` 返回 `task_status=complete`，但 `tool_calls=["stock_news"]`，回答只能说明“最近30天没有结构化财报”；追问“查之前问的财报呢”`run_4a62f9cfb08b4e8abf631254180d4960` 也没有调用工具。

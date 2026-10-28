@@ -207,3 +207,80 @@ def test_context_builder_uses_referents_and_exposes_verified_flag():
     assert result.resolved_reference["verified"] is True
     payload = json.loads(result.messages[1].content.split("\n", 1)[1])
     assert payload["resolved_reference"]["symbols"] == ["300750", "600519"]
+
+
+def _first_board():
+    return {"name": "first_board_ratings", "status": "success", "output": {
+        "name": "first_board_ratings", "status": "ok",
+        "rows": [
+            {"symbol": "603037", "name": "凯众股份", "trade_date": "2026-10-27"},
+            {"symbol": "601956", "name": "东贝集团", "trade_date": "2026-10-27"},
+            {"symbol": "600828", "name": "茂业商业", "trade_date": "2026-10-27"},
+        ],
+        "query_scope": {"scope_version": 1, "tool": "first_board_ratings",
+                        "arguments": {"trade_date": "2026-10-27"},
+                        "explicit_arguments": {"trade_date": "2026-10-27"}},
+    }}
+
+
+def test_markdown_table_order_wins_over_an_incidental_bullet():
+    refs = build_conversation_referents("run-1", response(
+        "| 排名 | 代码 | 名称 |\n|---|---|---|\n"
+        "| 1 | 603037 | 凯众股份 |\n| 2 | 601956 | 东贝集团 |\n\n"
+        "- 凯众股份与东贝集团同为最高分。",
+        [_first_board()],
+    ))
+    assert refs["stock_set"]["ordinal_resolvable"] is True
+    assert refs["stock_set"]["ordered_symbols"] == ["603037", "601956"]
+    resolved = resolve_reference(
+        "上一张表的第一只", [],
+        intent={"kind": "entities", "quote": "上一张表的第一只", "ordinal": 1},
+        referents=refs,
+    )
+    assert resolved["status"] == "resolved"
+    assert resolved["symbols"] == ["603037"]
+
+
+def _market_analysis(tool, date):
+    return {"name": tool, "status": "success", "output": {
+        "name": tool, "status": "ok",
+        "rows": [{"trade_date": date, "matched_count": 1}],
+        "query_scope": {"scope_version": 1, "tool": tool,
+                        "arguments": {"trade_date": date},
+                        "explicit_arguments": {"trade_date": date}},
+    }}
+
+
+def test_multiple_analysis_scopes_with_one_date_resolve_the_date():
+    refs = build_conversation_referents("run-1", response(
+        "2026-10-27 市场结构",
+        [_market_analysis("market_summary", "2026-10-27"),
+         _market_analysis("market_event_pool", "2026-10-27")],
+    ))
+    assert len(refs["analyses"]) == 2
+    resolved = resolve_reference(
+        "沿用刚才这一天，开板率与炸板未回封率是多少？", [],
+        intent={"kind": "analysis", "quote": "沿用刚才这一天",
+                "date_override": "today"},
+        referents=refs,
+    )
+    assert resolved["status"] == "resolved"
+    assert resolved["kind"] == "analysis"
+    assert resolved["resolved_date"] == "2026-10-27"
+    assert resolved["analysis_scope"] is None
+    assert resolved["query_scope_status"] == "multiple"
+
+
+def test_multiple_analysis_scopes_with_different_dates_still_clarify():
+    refs = build_conversation_referents("run-1", response(
+        "两日市场结构",
+        [_market_analysis("market_summary", "2026-10-27"),
+         _market_analysis("market_event_pool", "2026-10-24")],
+    ))
+    resolved = resolve_reference(
+        "沿用刚才这一天，开板率与炸板未回封率是多少？", [],
+        intent={"kind": "analysis", "quote": "沿用刚才这一天",
+                "date_override": "today"},
+        referents=refs,
+    )
+    assert resolved["status"] == "clarify"

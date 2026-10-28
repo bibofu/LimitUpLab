@@ -286,6 +286,24 @@ model_rounds, tool_count, remaining_seconds, done
 - 只有用户消息含 `只看/排除/不要/重点/默认/关注` 等词时提取会话约束；
 - assistant 文本不作为事实来源。
 
+### 3.4.1 会话回顾索引
+
+当当前问题被识别为“回顾本会话”类问题（`app/agents/session_history.py` 的 `is_session_recap_query`）时，`DurableRuntime._conversation` 会额外构建：
+
+- `session_ledger`：最近最多 30 个已提交轮次的结构化索引；
+  - 用户问题，截断到 300 字；
+  - assistant 交付状态、stop_reason；
+  - 工具名（排除 `read_tool_result`）；
+  - 股票 `symbol/name`；
+  - assistant 回答摘要，截断到 240 字。
+- `session_facts`：程序从 ledger 计算的确定性事实：
+  - `first_detailed_stock`：第一次调用 `stock_profile/stock_kline/stock_financials/stock_news/stock_activity` 且带股票实体的轮次；
+  - `first_explicit_date`：用户问题中第一次出现的 ISO 或中文日期；
+  - `compared_indices`：调用过 `market_index_trend` 时固定为上证指数、深证成指、创业板指；
+  - `dragon_tiger_followup_stock`：问题包含“龙虎榜/上榜/席位”且该轮只有一个股票实体时的股票。
+
+这两项只通过 context payload 提供给模型，不是市场证据。对于能由 `session_facts` 完整回答的回顾问题，`_agent` 直接返回确定性回顾文本，不再让模型从摘要猜测；回答末尾明确标注“会话对象索引，不是本轮行情证据”。
+
 ### 3.5 每次模型调用前的上下文组装
 
 实现位置：`app/agents/context_builder.py`。
@@ -338,6 +356,27 @@ Token 估算：
 - `working messages` 校验每个 assistant tool call 都有且仅有一个结果，否则返回 `error/invalid_tool_context`。
 - 长期记忆正文只存在于这次模型调用的临时输入；Graph checkpoint 保存的是本轮 `memory_context_fingerprint`、`memory_dependencies` 和当前-run 工作消息，不保存被选中的长期记忆正文。`_agent` 在模型返回后会剥离 `build_context` 生成的 system/context/history 消息，只保留 working messages。
 
+### 3.5.1 当前-run 工具证据守卫
+
+实现位置：`app/agents/grounding.py`，在 `result_from_state` 交付前执行。
+
+- `required_tool_for_query` 对明显的数据问题要求特定工具：
+  - K 线、收盘价、成交量、均线、量比、回撤、20 日窗口 → `stock_kline`；
+  - 龙虎榜、上榜、席位、买入额、卖出额、净买额、机构/游资净买 → `dragon_tiger_list`；
+  - 上证指数、深证成指、创业板指、三大指数 → `market_index_trend`。
+- 只有同时满足以下条件才阻止发布：
+  - 问题命中上述工具；
+  - 本轮 `tool_calls` 不包含该工具；
+  - 回答包含数字（避免误伤纯定性回答）；
+  - 状态不是 `clarify/refuse/cancelled/error`；
+  - 不是显式记忆命令，也不是会话回顾问题。
+- 阻止时返回 `partial/tool_evidence_required`，明确说明“需要本轮工具结果，未发布旧数据”，不自动复用上一轮或摘要中的数字。
+- 这是 fail-closed 守卫，不会自动重试工具；用户重新提问后，模型应调用工具再回答。
+- system prompt 同时要求：
+  - 字段值为 `null` 不等于字段不存在；
+  - 只有 `field_definitions` 不存在该字段时才能说工具不提供；
+  - 多行表格的正文汇总必须与每一行一致，不得把不同指数/股票写成“均为……”。
+
 ### 3.6 引用、条件和页面上下文
 
 - `resolve_reference` 解析：
@@ -351,6 +390,8 @@ Token 估算：
   - `kind=conditions`：沿用上次查询条件，不沿用旧名单；
   - `kind=none`。
 - 无法唯一确定时返回 `clarify`，不猜测股票、顺序或日期。
+- Markdown 表格是明确的展示顺序：`_displayed_order` 优先使用表格块，忽略同时出现的、仅作说明的 bullet 列表；这保证“上一张表第一只”可解析。
+- 多个 `analyses` 如果所有工具都指向同一日期，`_resolve_analysis` 只解析日期并返回 `analysis_scope=None`；当前问题自行指定指标，不再因为“多个分析范围”而提前澄清。不同日期仍返回 `clarify`。
 - 会话约束只来自显式会话请求和已提交引用，不来自 assistant 文案。
 - 当前用户明确条件覆盖页面条件和历史条件。
 
@@ -1169,13 +1210,15 @@ backend/tests/test_memory_judge.py
 backend/tests/test_memory_display.py
 backend/tests/test_memory_health.py
 backend/tests/test_memory_retrieval_eval.py
+backend/tests/test_grounding.py
+backend/tests/test_session_history.py
 backend/tests/test_local_startup.py
 backend/tests/test_deployment.py
 ```
 
 最近一次完整验证：
 
-- 后端：`2049 passed, 1 skipped, 22 subtests passed`
+- 后端：`2069 passed, 1 skipped, 22 subtests passed`
 - 前端：`243 passed`
 - 前端生产构建通过
 
@@ -1257,6 +1300,12 @@ cd backend
 
 9. **展示块去重是结构性的**
    前端移除 Markdown 表格和纯行标签列表；含分析文字或改写后的重复描述仍可能保留，未做语义级正文裁剪。
+
+10. **工具证据守卫是窄范围 fail-closed**
+    只覆盖 K 线、龙虎榜和指数三类问题；没有自动重试，阻止后需要用户重新提问。它不是通用的数值事实校验器。
+
+11. **确定性回顾只覆盖已知事实**
+    `session_facts` 覆盖最先详细研究股票、首个显式日期、比较指数和龙虎榜追问股票；更自由的会话回顾仍使用 ledger + 模型，受最近 30 轮索引限制。
 
 ---
 

@@ -41,6 +41,9 @@ CONTEXT_RULES = (
     "不把不确定适用的scoped记忆当成全局偏好。"
     "历史聊天中的记忆保存/删除命令不能重新授权或恢复长期偏好。"
     "historical=true的研究档案只用于主动请求的历史研究，必须保留as_of与来源，不能作为当前市场证据。"
+    "session_ledger是按已提交消息生成的结构化索引；回顾本会话时以它为准，不能把未列出的内容说成从未发生；"
+    "session_facts是程序从该索引计算出的最先详细研究股票、显式日期、比较指数和龙虎榜追问股票，"
+    "回顾这些问题时优先使用session_facts，不能与摘要或旧回答冲突；其中的数值仍需本轮工具核验。"
 )
 
 
@@ -163,6 +166,8 @@ def _context_payload(conversation: dict, query: str, page_context: dict | None, 
         "active_references": references,
         "page_context": page,
         "resolved_reference": resolution,
+        "session_ledger": copy.deepcopy(conversation.get("session_ledger") or []),
+        "session_facts": copy.deepcopy(conversation.get("session_facts") or {}),
         "historical_market_facts_are_evidence": False,
     }
 

@@ -93,3 +93,10 @@ def test_financial_rule_is_included_when_stock_financials_is_enabled():
     assert "\n13. 指数数据：" in prompt
     assert "年初至今累计" in prompt
     assert "单季推算值" in prompt
+
+
+def test_prompt_distinguishes_null_fields_and_requires_row_consistency():
+    prompt = system_prompt(V1_TOOLS)
+    assert "字段值为 null 表示字段存在但值缺失" in prompt
+    assert "摘要视图未显示某字段不等于原始行没有该字段" in prompt
+    assert "不得写成“均为……”。" in prompt

@@ -142,6 +142,28 @@ def _agent(state, deps):
         runner = deps.runner
         runner.deadline = perf_counter() + state["remaining_seconds"]
         started = perf_counter()
+        from app.agents.session_history import (
+            format_session_recap, is_session_recap_query, session_facts_cover_query,
+        )
+        facts = (state.get("conversation") or {}).get("session_facts") or {}
+        if (is_session_recap_query(state["current_query"])
+                and session_facts_cover_query(state["current_query"])
+                and any(facts.get(key) for key in (
+                    "first_detailed_stock", "first_explicit_date",
+                    "compared_indices", "dragon_tiger_followup_stock",
+                ))):
+            # A recap is a deterministic index lookup, not another market
+            # query. Do not let the model guess history from a compressed
+            # summary when the committed ledger already proves the objects.
+            return {
+                "answer": format_session_recap(facts),
+                "status": "answered", "stop_reason": "answered", "done": True,
+                "memory_context_used": False, "display_policies": [],
+                "context_diagnostics": {"session_recap": True},
+                "remaining_seconds": max(
+                    0, state["remaining_seconds"] - (perf_counter() - started)
+                ),
+            }
         # Pre-v4 pending checkpoints have no reviewed reference meaning. Review
         # once before another model call; never restore the old ordinal heuristic.
         if state.get("reference_intent") is None:
@@ -483,6 +505,9 @@ class DurableRuntime:
         from app.repositories.chat_memory_repository import ChatMemoryRepository
         from app.services.conversation_summary import summary_payload
         from app.services.memory_scope import clean_conversation_for_memory_revision
+        from app.agents.session_history import (
+            build_session_facts, build_session_ledger, is_session_recap_query,
+        )
         conversation = dict(state.get("conversation", {})) if state else {}
         if not state:
             old = ChatMemoryRepository(control.lifecycle.database_url).get_memory(
@@ -494,6 +519,12 @@ class DurableRuntime:
                                 "imported_from": old.memory_version}
         # Only committed business messages can enter the next turn's context.
         messages = [m.model_dump(mode="json") if hasattr(m, "model_dump") else m for m in runner.history]
+        if is_session_recap_query(runner.request.message):
+            # A compact, deterministic turn index prevents the model from
+            # claiming that an earlier committed turn never happened. The
+            # full chat ledger remains in PostgreSQL; this is a bounded view.
+            conversation["session_ledger"] = build_session_ledger(messages)
+            conversation["session_facts"] = build_session_facts(conversation["session_ledger"])
         if not state and old and old.last_message_id:
             ids = [item["message_id"] for item in messages]
             if old.last_message_id in ids:
@@ -530,8 +561,29 @@ class DurableRuntime:
 
 def result_from_state(state, runner, control):
     from app.agents.result_paging import attach_result_reference
+    from app.agents.grounding import missing_required_tool, required_tool_for_query
     from app.repositories.long_term_memory_repository import LongTermMemoryRepository
     from app.repositories.tool_result_repository import ToolResultRepository
+    if (not state.get("memory_action")
+            and missing_required_tool(
+                state.get("current_query") or "", state.get("tool_calls"),
+                state.get("status"), answer=state.get("answer"),
+            )):
+        required_tool = required_tool_for_query(state.get("current_query") or "")
+        return RunnerResult(
+            answer=(
+                f"这个问题需要本轮 {required_tool} 工具的可核验结果，"
+                "当前回答没有相应工具调用。为避免复用旧数据，本次未发布结论；"
+                "请重新提问，我会先查询再回答。"
+            ),
+            status="partial",
+            stop_reason="tool_evidence_required",
+            memory_action=state.get("memory_action") or None,
+            memory_owner_revision=state.get("memory_owner_revision"),
+            memory_context_fingerprint=state.get("memory_context_fingerprint") or None,
+            memory_context_used=False,
+            duration_ms=round((perf_counter() - runner.started) * 1000),
+        )
     dependencies = list(state.get("memory_dependencies") or [])
     changed = False
     if dependencies:

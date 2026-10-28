@@ -119,13 +119,15 @@ def _displayed_order(answer: str, identities: dict[str, str]) -> list[str] | Non
                 block = []
             continue
         block.append(line)
-    candidates: list[list[str]] = []
+    table_candidates: list[list[str]] = []
+    prose_candidates: list[list[str]] = []
     for lines in blocks:
         matches = [[symbol for symbol, name in identities.items() if _mentions(line, symbol, name)]
                    for line in lines]
         if not any(matches):
             continue
         order = []
+        invalid = False
         for index, (line, matched) in enumerate(zip(lines, matches)):
             separator = "|" in line and bool(line.strip("| :-")) is False
             header = (index + 1 < len(lines) and "|" in lines[index + 1]
@@ -135,9 +137,19 @@ def _displayed_order(answer: str, identities: dict[str, str]) -> list[str] | Non
             # An unrecognized middle row cannot be silently skipped: doing so
             # would change what "the second stock" means in the displayed list.
             if len(matched) != 1:
-                return None
+                invalid = True
+                break
             order.extend(matched)
-        candidates.append(order)
+        if invalid or not order:
+            continue
+        # A Markdown table is an explicit displayed order. Incidental prose
+        # bullets that mention the same names must not create a second
+        # candidate and disable ordinal resolution.
+        if any("|" in line for line in lines):
+            table_candidates.append(order)
+        else:
+            prose_candidates.append(order)
+    candidates = table_candidates or prose_candidates
     if len(candidates) != 1:
         return None
     order = candidates[0]
@@ -568,13 +580,51 @@ def _resolve_entities_from_referents(reviewed, referents: dict[str, Any],
             "query_scope_status": "unknown"}
 
 
+def _analysis_date(analysis: dict[str, Any]) -> str | None:
+    """Read a date only from an analysis' own scope, never from another tool."""
+    scope = analysis.get("query_scope")
+    arguments = scope.get("arguments") if isinstance(scope, dict) else {}
+    if not isinstance(arguments, dict):
+        arguments = {}
+    return _date_text(
+        analysis.get("as_of") or arguments.get("trade_date")
+        or arguments.get("requested_as_of") or arguments.get("as_of")
+        or arguments.get("end_date")
+    )
+
+
 def _resolve_analysis(reviewed, referents: dict[str, Any]) -> dict[str, Any] | None:
     analyses = [item for item in referents.get("analyses") or [] if isinstance(item, dict)]
     if not analyses:
         return None
     if len(analyses) != 1:
-        return {"status": "clarify",
-                "clarification": "上一轮包含多个分析范围，请明确要继续哪个指标或日期。"}
+        # Multiple tools can describe the same date. The date is still an
+        # unambiguous reference; only the metric/tool remains unresolved.
+        dates = {date for analysis in analyses if (date := _analysis_date(analysis))}
+        if len(dates) != 1:
+            return {"status": "clarify",
+                    "clarification": "上一轮包含多个分析范围，请明确要继续哪个指标或日期。"}
+        common_date = next(iter(dates))
+        date_scope = referents.get("date_scope") or {}
+        if reviewed.date_override == "previous_trade_date":
+            resolved_date = date_scope.get("previous_trade_date") or next(
+                (analysis.get("previous_trade_date") for analysis in analyses
+                 if analysis.get("previous_trade_date")), None)
+        elif reviewed.date_override == "today":
+            resolved_date = date_scope.get("as_of") or common_date
+        else:
+            resolved_date = common_date
+        return {
+            "status": "resolved", "kind": "analysis", "symbols": [],
+            "analysis_scope": None,
+            "analysis_scopes": [analysis.get("query_scope") for analysis in analyses],
+            "tool": None, "metric_keys": [],
+            "as_of": common_date, "date_override": reviewed.date_override,
+            "resolved_date": resolved_date, "verified": True,
+            "source": "tool", "source_run_id": referents.get("source_run_id"),
+            "trade_date": None, "filters": None, "sort_rules": None,
+            "query_scope": None, "query_scope_status": "multiple",
+        }
     analysis = analyses[0]
     date_scope = referents.get("date_scope") or {}
     resolved_date = None
