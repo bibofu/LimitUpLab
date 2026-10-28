@@ -28,6 +28,7 @@ import {
 
 import { AgentChatDock } from "./components/AgentChatDock";
 import { Panel } from "./components/Panel";
+import { AdminReviewPage } from "./pages/AdminReviewPage";
 import { PremarketPage } from "./pages/PremarketPage";
 import { recommendationIntelligenceFor, useRecommendationIntelligence } from "./hooks/useRecommendationIntelligence";
 import { refreshReviewFacts } from "./hooks/useReviewReport";
@@ -292,6 +293,7 @@ export function App() {
         <Route path="/stocks/failed" element={<DetailView view="failed" eventsResource={failed} ratingsResource={firstBoardRatings} />} />
         <Route path="/stocks/recent-limit-up" element={<ResourceSection label="近期涨停" resource={recent}>{events => <RecentLimitUp events={events} />}</ResourceSection>} />
         <Route path="/stocks/:symbol" element={<StockDetail latestTradeDate={latestTradeDate} ratings={firstBoardRatings.data} />} />
+        <Route path="/admin/observability" element={<AdminReviewPage />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </main>
