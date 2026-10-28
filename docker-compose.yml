@@ -120,6 +120,28 @@ services:
       disable: true
     command: ["python", "scripts/run_memory_embeddings.py"]
 
+  review-worker:
+    image: limituplab-backend:${LIMITUPLAB_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        INSTALL_HITHINK_FINANCE: ${INSTALL_HITHINK_FINANCE:-true}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.production
+    environment:
+      LIMITUPLAB_DATABASE_URL: ${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}
+      LIMITUPLAB_DATA_DIRECTORY: /app/data
+      LIMITUPLAB_REVIEW_ENABLED: ${LIMITUPLAB_REVIEW_ENABLED:-true}
+      TZ: Asia/Shanghai
+    volumes:
+      - limituplab-data:/app/data
+    healthcheck:
+      disable: true
+    command: ["python", "scripts/run_review_worker.py"]
+
   daily-update:
     image: limituplab-backend:${LIMITUPLAB_IMAGE_TAG:-local}
     build:

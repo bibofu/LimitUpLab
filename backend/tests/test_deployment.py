@@ -215,6 +215,17 @@ def test_memory_workers_share_backend_image_and_persist_model_cache():
     assert embeddings["environment"]["LIMITUPLAB_MEMORY_EMBEDDING_CACHE"] == "/app/data/memory_embeddings"
 
 
+def test_review_worker_shares_backend_image_and_runs_the_review_script():
+    base = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    definition = base["services"]["review-worker"]
+    assert definition["image"] == "limituplab-backend:${LIMITUPLAB_IMAGE_TAG:-local}"
+    assert definition["command"] == ["python", "scripts/run_review_worker.py"]
+    assert "ports" not in definition
+    assert definition["volumes"] == ["limituplab-data:/app/data"]
+    assert definition["restart"] == "unless-stopped"
+    assert definition["environment"]["LIMITUPLAB_REVIEW_ENABLED"] == "${LIMITUPLAB_REVIEW_ENABLED:-true}"
+
+
 def test_extension_bootstrap_precedes_application_migrations_without_app_superuser():
     overlay = yaml.safe_load((ROOT / "docker-compose.postgresql.yml").read_text())
     services = overlay["services"]
@@ -251,12 +262,14 @@ def test_release_starts_and_inspects_every_background_worker(postgres_release, m
     item.compose.assert_called_once_with(
         item.previous, "up", "-d", "--no-build",
         "recommendation-refresh", "memory-extraction", "memory-embeddings",
+        "review-worker",
     )
     inspected = [call.args[2] for call in item.run.call_args_list]
     assert inspected == [
         "limituplab-recommendation-refresh-1",
         "limituplab-memory-extraction-1",
         "limituplab-memory-embeddings-1",
+        "limituplab-review-worker-1",
     ]
 
 

@@ -23,7 +23,7 @@ REPO = Path("/opt/LimitUpLab")
 STATE = Path("/var/lib/limituplab-deploy")
 LOCK = Path("/var/lock/limituplab-release.lock")
 MAINTENANCE = REPO / ".maintenance"
-WORKER_SERVICES = ("recommendation-refresh", "memory-extraction", "memory-embeddings")
+WORKER_SERVICES = ("recommendation-refresh", "memory-extraction", "memory-embeddings", "review-worker")
 LEGACY_WORKER_SERVICES = ("quality-worker", "quality-judge-worker")
 SERVICES = ("backend", "frontend", *WORKER_SERVICES, *LEGACY_WORKER_SERVICES, "daily-update")
 
