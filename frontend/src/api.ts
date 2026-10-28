@@ -4,6 +4,7 @@ import { loadChatBootstrap } from "./utils/chatBootstrap";
 import { DASHBOARD_TIMEOUT_MS, GET_TIMEOUT_MS, HttpResponseError, requestJson } from "./utils/jsonRequest";
 import type { ConsolidationPool } from "./consolidation";
 import type { AnswerFeedbackPayload } from "./utils/answerFeedback";
+import type { ObservabilitySummary } from "./observabilityTypes";
 import type {
   ReviewCaseDetail,
   ReviewBulkDismissResponse,
@@ -427,6 +428,13 @@ export function deleteAnswerFeedback(runId: string) {
 
 function adminHeaders(adminKey: string): Record<string, string> {
   return { "X-LimitUpLab-Admin-Key": adminKey };
+}
+
+export function fetchObservabilitySummary(adminKey: string, days = 7) {
+  return request<ObservabilitySummary>(
+    `/api/admin/observability/summary?days=${days}`,
+    { headers: adminHeaders(adminKey), cache: "no-store" },
+  );
 }
 
 export function fetchReviewCases(
