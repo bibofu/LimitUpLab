@@ -24,7 +24,8 @@ STATE = Path("/var/lib/limituplab-deploy")
 LOCK = Path("/var/lock/limituplab-release.lock")
 MAINTENANCE = REPO / ".maintenance"
 WORKER_SERVICES = ("recommendation-refresh", "memory-extraction", "memory-embeddings")
-SERVICES = ("backend", "frontend", *WORKER_SERVICES, "daily-update")
+LEGACY_WORKER_SERVICES = ("quality-worker", "quality-judge-worker")
+SERVICES = ("backend", "frontend", *WORKER_SERVICES, *LEGACY_WORKER_SERVICES, "daily-update")
 
 
 def database_mode() -> str:
@@ -128,6 +129,7 @@ class Deployment:
         self.maintenance = False
         self.promoted = False
         self.mode = "postgresql"
+        self._service_names: dict[tuple[str, str], tuple[str, ...]] = {}
 
     # Update the in-memory release state and persist it to the deployment journal.
     def status(self, status: str, **details) -> None:
@@ -169,6 +171,27 @@ class Deployment:
             raise RuntimeError("Release environment symlink points outside production configuration")
         return path
 
+    def declared_services(self, release: dict) -> tuple[str, ...]:
+        """Inspect service names only, before adding any image overrides."""
+        path = Path(release["path"])
+        mode = release.get("engine", self.mode)
+        if mode != self.mode:
+            raise RuntimeError("Automatic cross-database release or rollback is forbidden")
+        key = (str(path), mode)
+        if key not in self._service_names:
+            output = self.run(*compose_arguments(path, mode), "--profile", "*",
+                              "config", "--services", capture=True, timeout=30)
+            names = tuple(dict.fromkeys(output.splitlines()))
+            if not {"backend", "frontend", "postgres", "postgres-migrate"}.issubset(names):
+                raise RuntimeError("Release is missing required PostgreSQL application services")
+            self._service_names[key] = names
+        return self._service_names[key]
+
+    def worker_services(self, release: dict) -> tuple[str, ...]:
+        declared = self.declared_services(release)
+        return tuple(name for name in (*WORKER_SERVICES, *LEGACY_WORKER_SERVICES)
+                     if name in declared)
+
     # Run Docker Compose against the selected release and its pinned image override.
     def compose(self, release: dict, *args: str, timeout: int = 600, capture: bool = False) -> str:
         path = Path(release["path"])
@@ -176,7 +199,8 @@ class Deployment:
         if mode != self.mode:
             raise RuntimeError("Automatic cross-database release or rollback is forbidden")
         override = STATE / "releases" / f"{release['sha']}-images.json"
-        services = (*SERVICES, "postgres-migrate")
+        declared = self.declared_services(release)
+        services = (name for name in (*SERVICES, "postgres-migrate") if name in declared)
         write_json(override, {"services": {
             service: {"image": release["frontend"] if service == "frontend" else release["backend"]}
             for service in services
@@ -218,6 +242,10 @@ class Deployment:
             previous_tag = f"limituplab-{service}:rollback-{old_sha}"
             self.run("docker", "tag", image, previous_tag)
             self.previous[service] = previous_tag
+        running = self.compose(self.previous, "ps", "--services", "--status", "running",
+                               capture=True).splitlines()
+        self.previous["running_workers"] = [name for name in self.worker_services(self.previous)
+                                            if name in running]
         target = {"sha": self.sha, "path": str(self.worktree(self.sha)), "engine": self.mode,
                   "backend": f"limituplab-backend:{self.sha}", "frontend": f"limituplab-frontend:{self.sha}"}
         self.status("building", previous=self.previous, target=target)
@@ -304,10 +332,15 @@ class Deployment:
 
     # Start the release's background workers after the foreground service transition.
     def start_workers(self, release: dict) -> None:
-        self.compose(release, "up", "-d", "--no-build", *WORKER_SERVICES)
+        declared = self.worker_services(release)
+        workers = tuple(name for name in declared
+                        if "running_workers" not in release or name in release["running_workers"])
+        if not workers:
+            return
+        self.compose(release, "up", "-d", "--no-build", *workers)
         # Check they remain alive, rather than only checking a successful docker start.
         time.sleep(10)
-        for service in WORKER_SERVICES:
+        for service in workers:
             state = json.loads(self.run(
                 "docker", "inspect", f"limituplab-{service}-1",
                 "--format", "{{json .State}}", capture=True,
@@ -318,7 +351,7 @@ class Deployment:
     # Attempt release recovery using the recorded previous state, retaining maintenance protection
     # when rollback is unsafe.
     def recover(self, target: dict) -> None:
-        self.compose(target, "stop", "-t", "60", *WORKER_SERVICES, "backend", "frontend")
+        self.compose(target, "stop", "-t", "60", *self.worker_services(target), "backend", "frontend")
         if self.promoted or self.previous_schema is None or self.schema() != self.previous_schema:
             self.status("manual_recovery_required", reason="Release metadata advanced or database schema changed/unverified")
             return
@@ -342,7 +375,7 @@ class Deployment:
         self.maintenance = True
         self.status("maintenance")
         try:
-            self.compose(self.previous, "stop", "-t", "60", *WORKER_SERVICES, "frontend", "backend")
+            self.compose(self.previous, "stop", "-t", "60", *self.worker_services(self.previous), "frontend", "backend")
             self.previous_schema = self.schema()
             self.backup()
             check_window()

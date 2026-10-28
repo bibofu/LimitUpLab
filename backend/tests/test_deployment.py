@@ -56,6 +56,7 @@ def deployment(tmp_path, monkeypatch):
     item.prepare = Mock(return_value={"sha": "a" * 40, "path": "new", "backend": "new-back", "frontend": "new-front"})
     for name in ("wait_for_jobs", "compose", "backup", "probe", "start_workers", "restore_local_tags", "git"):
         setattr(item, name, Mock())
+    item.worker_services = Mock(return_value=release.WORKER_SERVICES)
     item.schema = Mock(return_value={"version": 12, "hash": "unchanged"})
     return item
 
@@ -361,6 +362,10 @@ def postgres_release(tmp_path, monkeypatch):
     item.mode = "postgresql"
     item.previous = {"sha": "b" * 40, "path": str(tmp_path), "engine": "postgresql",
                      "backend": "old-back", "frontend": "old-front"}
+    item.declared_services = Mock(return_value=(
+        "backend", "frontend", "postgres", "postgres-migrate", "daily-update",
+        *release.WORKER_SERVICES,
+    ))
     return item
 
 
@@ -377,6 +382,86 @@ def test_postgres_compose_pins_migration_image_and_explicit_configuration(postgr
     assert override["services"]["memory-extraction"]["image"] == "old-back"
     assert override["services"]["memory-embeddings"]["image"] == "old-back"
     assert item.run.call_args.kwargs["capture"] is True
+
+
+def test_compose_discovers_service_names_without_exporting_configuration(postgres_release):
+    item = postgres_release
+    del item.declared_services
+    names = ("backend", "frontend", "postgres", "postgres-migrate", "recommendation-refresh")
+    item.run = Mock(return_value="\n".join(names))
+    assert item.declared_services(item.previous) == names
+    assert item.declared_services(item.previous) == names
+    item.run.assert_called_once()
+    assert item.run.call_args.args[-4:] == ("--profile", "*", "config", "--services")
+    assert item.run.call_args.kwargs == {"capture": True, "timeout": 30}
+
+
+def test_compose_service_discovery_fails_before_creating_override(postgres_release):
+    item = postgres_release
+    del item.declared_services
+    item.run = Mock(return_value="backend\nfrontend")
+    with pytest.raises(RuntimeError, match="missing required"):
+        item.compose(item.previous, "up", "-d")
+    assert not list((release.STATE / "releases").glob("*-images.json"))
+    assert item.run.call_count == 1
+
+
+def test_old_release_override_never_invents_memory_workers(postgres_release):
+    item = postgres_release
+    item.declared_services.return_value = (
+        "backend", "frontend", "postgres", "postgres-migrate", "daily-update",
+        "recommendation-refresh", *release.LEGACY_WORKER_SERVICES,
+    )
+    item.run = Mock(return_value="")
+    item.compose(item.previous, "stop", "backend")
+    override = json.loads((release.STATE / "releases" / ("b" * 40 + "-images.json")).read_text())
+    services = override["services"]
+    assert "memory-extraction" not in services
+    assert "memory-embeddings" not in services
+    assert "postgres" not in services
+    assert services["postgres-migrate"]["image"] == "old-back"
+    assert services["quality-worker"]["image"] == "old-back"
+    assert services["quality-judge-worker"]["image"] == "old-back"
+
+
+def test_rollback_restarts_only_previously_running_declared_workers(postgres_release, monkeypatch):
+    item = postgres_release
+    item.declared_services.return_value = (
+        "backend", "frontend", "postgres", "postgres-migrate",
+        "recommendation-refresh", *release.LEGACY_WORKER_SERVICES,
+    )
+    item.previous["running_workers"] = ["recommendation-refresh", "quality-worker"]
+    item.compose = Mock()
+    item.run = Mock(return_value=json.dumps({"Running": True, "Restarting": False}))
+    monkeypatch.setattr(release.time, "sleep", lambda _: None)
+    item.start_workers(item.previous)
+    item.compose.assert_called_once_with(item.previous, "up", "-d", "--no-build",
+                                         "recommendation-refresh", "quality-worker")
+    assert [call.args[2] for call in item.run.call_args_list] == [
+        "limituplab-recommendation-refresh-1", "limituplab-quality-worker-1",
+    ]
+
+
+def test_rollback_with_no_running_workers_does_not_start_all_services(postgres_release):
+    item = postgres_release
+    item.previous["running_workers"] = []
+    item.compose = Mock()
+    item.run = Mock()
+    item.start_workers(item.previous)
+    item.compose.assert_not_called()
+    item.run.assert_not_called()
+
+
+def test_upgrade_stops_legacy_workers_before_backup_without_new_worker_names(deployment):
+    legacy = ("recommendation-refresh", *release.LEGACY_WORKER_SERVICES)
+    deployment.worker_services.side_effect = lambda row: legacy if row["path"] == "old" else release.WORKER_SERVICES
+    calls = []
+    deployment.compose.side_effect = lambda *args, **kwargs: calls.append(("compose", args))
+    deployment.backup.side_effect = lambda: calls.append(("backup", ()))
+    deployment.execute()
+    assert calls[0] == ("compose", (deployment.previous, "stop", "-t", "60",
+                                    *legacy, "frontend", "backend"))
+    assert calls[1][0] == "backup"
 
 
 @pytest.mark.parametrize("missing", [".env.postgresql", "docker-compose.postgresql.yml"])
