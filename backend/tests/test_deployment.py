@@ -215,6 +215,33 @@ def test_memory_workers_share_backend_image_and_persist_model_cache():
     assert embeddings["environment"]["LIMITUPLAB_MEMORY_EMBEDDING_CACHE"] == "/app/data/memory_embeddings"
 
 
+def test_extension_bootstrap_precedes_application_migrations_without_app_superuser():
+    overlay = yaml.safe_load((ROOT / "docker-compose.postgresql.yml").read_text())
+    services = overlay["services"]
+    bootstrap = services["postgres-extension-init"]
+    migration = services["postgres-migrate"]
+    assert bootstrap["image"] == services["postgres"]["image"] == "pgvector/pgvector:pg18"
+    assert bootstrap["restart"] == "no"
+    assert bootstrap["depends_on"]["postgres"]["condition"] == "service_healthy"
+    assert migration["depends_on"]["postgres-extension-init"]["condition"] == "service_completed_successfully"
+    assert bootstrap["environment"] == {
+        "PGHOST": "postgres", "PGPORT": "5432", "PGDATABASE": "${POSTGRES_DB:-limituplab}",
+        "PGUSER": "${POSTGRES_USER:-limituplab_admin}",
+        "PGPASSWORD": "${POSTGRES_PASSWORD:?Set a unique PostgreSQL password}",
+    }
+    assert bootstrap["command"] == [
+        "psql", "-X", "--no-password", "--set", "ON_ERROR_STOP=1", "--command",
+        "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public",
+    ]
+    assert "ports" not in bootstrap and "volumes" not in bootstrap
+    assert "PGPASSWORD" not in migration["environment"]
+    assert "POSTGRES_PASSWORD" not in migration["environment"]
+    assert migration["environment"]["LIMITUPLAB_DATABASE_URL"] == "${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}"
+    example = (ROOT / ".env.postgresql.example").read_text()
+    assert "POSTGRES_USER=limituplab_admin" in example
+    assert "postgresql+psycopg://limituplab:REPLACE_WITH_APP_PASSWORD@" in example
+
+
 def test_release_starts_and_inspects_every_background_worker(postgres_release, monkeypatch):
     item = postgres_release
     item.compose = Mock()

@@ -17,7 +17,7 @@ services:
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-limituplab}
-      POSTGRES_USER: ${POSTGRES_USER:-limituplab}
+      POSTGRES_USER: ${POSTGRES_USER:-limituplab_admin}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a unique PostgreSQL password}
     volumes:
       - limituplab-postgres:/var/lib/postgresql
@@ -27,6 +27,20 @@ services:
       timeout: 3s
       retries: 20
     stop_grace_period: 60s
+
+  postgres-extension-init:
+    image: pgvector/pgvector:pg18
+    restart: "no"
+    environment:
+      PGHOST: postgres
+      PGPORT: "5432"
+      PGDATABASE: ${POSTGRES_DB:-limituplab}
+      PGUSER: ${POSTGRES_USER:-limituplab_admin}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?Set a unique PostgreSQL password}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    command: ["psql", "-X", "--no-password", "--set", "ON_ERROR_STOP=1", "--command", "CREATE EXTENSION IF NOT EXISTS vector WITH SCHEMA public"]
 
   postgres-migrate:
     image: limituplab-backend:${LIMITUPLAB_IMAGE_TAG:-local}
@@ -41,6 +55,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      postgres-extension-init:
+        condition: service_completed_successfully
     healthcheck:
       disable: true
     command: ["python", "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"]

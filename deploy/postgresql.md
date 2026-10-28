@@ -15,8 +15,7 @@ actual import, retained SQLite, restart, restore and scheduled-backup evidence.
 
 1. Keep the real `.env.production` settings, including one shared session secret
    and admin key for every API instance. Copy `.env.postgresql.example` to
-   `.env.postgresql`. For production, override its single-account example:
-   set `POSTGRES_USER=limituplab_admin` with a unique bootstrap password, and
+   `.env.postgresql`. Keep `POSTGRES_USER=limituplab_admin` with a unique bootstrap password, and
    point `LIMITUPLAB_DATABASE_URL` at the separate `limituplab` application role
    with a different password. URL-encode reserved characters in the URL password.
    The official image creates `POSTGRES_USER` as a superuser; do not use that
@@ -69,6 +68,15 @@ The overlay runs Alembic as a one-shot service before application processes. The
 upgrade entry point serializes competing deploy-time migrations. Requests only
 verify the schema revision. Future schema changes should use compatible additive
 migrations before rolling out code that requires them.
+
+Before Alembic, `postgres-extension-init` connects using the bootstrap `POSTGRES_*`
+credentials and creates `vector` in `public`. The password is passed through the
+client environment, never command arguments. A failed initialization blocks
+`postgres-migrate` and application startup. Alembic still uses the separate
+non-superuser application role; the existing extension makes its
+`CREATE EXTENSION IF NOT EXISTS` statement a no-op, as described by
+[PostgreSQL](https://www.postgresql.org/docs/18/sql-createextension.html).
+Do not grant superuser to the application role to work around extension setup.
 
 ## Import retained SQLite archives
 
