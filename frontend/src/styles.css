@@ -798,7 +798,7 @@ td span {
 .answer-feedback-actions {
   display: flex;
   align-items: center;
-  gap: 0;
+  gap: 30px;
 }
 
 .answer-feedback-actions button {
