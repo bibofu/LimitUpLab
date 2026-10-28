@@ -314,6 +314,8 @@ DEEPSEEK_API_KEY=<your-api-key>
 
 公开运行时建议同时配置 Agent 容量。默认每访客 8 次/分钟、60 次/天、同访客 1 个并发、全站 4 个并发。管理接口 `GET /api/agents/usage?days=7` 可查看请求、拒绝、LLM 调用和 token 汇总，`GET /api/agents/feedback/summary?days=7` 可查看点赞率、反馈覆盖率和点踩原因，均需要 `X-LimitUpLab-Admin-Key`。回答底部的点赞/点踩只保存当前访客对该 run 的一票；改票覆盖、撤销删除，投票不会进入聊天推理链路。审核队列、抽样检查和 LLM Judge 的分期方案与指标口径见 [在线反馈与 Badcase 回收](docs/Online_Observability_and_Badcase.md)。
 
+管理员审核台位于隐藏路由 `/admin/observability`，不进入公共导航；密钥只保存在页面内存。点踩会写入追加型信号，`review-worker` 把信号聚合为每个 run 唯一的案例，并按配置抽样正常回答。审核结论使用修订号防并发覆盖，导出内容沿用 `badCase.md` 格式且不含 owner 标识。
+
 ```dotenv
 LIMITUPLAB_AGENT_RATE_LIMIT_ENABLED=true
 LIMITUPLAB_AGENT_REQUESTS_PER_MINUTE=8
@@ -410,7 +412,7 @@ cd frontend
 npm.cmd run dev -- --host 127.0.0.1 --port 5173
 ```
 
-手动启动不包含推荐刷新、记忆提取和向量回填 worker；需要时分别运行 `backend\.venv\Scripts\python.exe backend\scripts\run_memory_extraction.py` 和 `backend\.venv\Scripts\python.exe backend\scripts\run_memory_embeddings.py`。macOS / Linux 将 Python 和 npm 命令替换为对应虚拟环境命令即可。
+手动启动不包含推荐刷新、记忆提取、向量回填和审核 worker；需要时分别运行 `backend\.venv\Scripts\python.exe backend\scripts\run_memory_extraction.py`、`backend\.venv\Scripts\python.exe backend\scripts\run_memory_embeddings.py` 和 `backend\.venv\Scripts\python.exe backend\scripts\run_review_worker.py`。审核 worker 单次处理可加 `--once`；不运行时点踩信号仍会保存，启动后会补偿聚合。macOS / Linux 将 Python 和 npm 命令替换为对应虚拟环境命令即可。
 
 
 
@@ -516,6 +518,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `PUT` | `/api/agents/chat/runs/{run_id}/feedback` | 保存或替换点赞/点踩及原因 |
 | `DELETE` | `/api/agents/chat/runs/{run_id}/feedback` | 撤销当前访客的投票 |
 | `GET` | `/api/agents/feedback/summary` | 投票比例、覆盖率和原因汇总（管理员） |
+| `GET` | `/api/admin/review/cases` | 审核案例队列与筛选（管理员） |
+| `GET` | `/api/admin/review/cases/{case_id}` | 案例证据、信号和审核历史（管理员） |
+| `PATCH` | `/api/admin/review/cases/{case_id}` | 带修订号校验的审核流转（管理员） |
+| `GET` | `/api/admin/review/cases/{case_id}/export` | 导出 badCase.md 片段（管理员） |
+| `GET` | `/api/admin/review/feedback` | 最近点赞/点踩明细（管理员） |
+| `GET` | `/api/admin/review/jobs` | 抽样与检查任务状态（管理员） |
+| `POST` | `/api/admin/review/jobs/drain` | 有界处理一批任务（管理员） |
+| `POST` | `/api/admin/review/sample` | 手动补充抽样（管理员） |
 | `POST` | `/api/agents/chat` | 同步 Agent 问答 |
 | `POST` | `/api/agents/chat/stream` | SSE 流式 Agent 问答 |
 | `GET` | `/api/limit-up/events` | 涨停事件查询 |

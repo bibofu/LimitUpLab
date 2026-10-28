@@ -86,7 +86,7 @@ Windows 每日收盘计划任务使用 `backend/scripts/run_scheduled_close_loop
 docker logs --tail 200 limituplab-pgvector
 ```
 
-后端与任务日志仍在 `backend/*.log`；记忆提取和向量回填分别写入 `backend/memory_extraction.log` 与 `backend/memory_embeddings.log`。`status`/`ensure` 错误不会输出连接密码。
+后端与任务日志仍在 `backend/*.log`；记忆提取和向量回填分别写入 `backend/memory_extraction.log` 与 `backend/memory_embeddings.log`。审核 worker 默认输出到启动终端，可运行 `backend\.venv\Scripts\python.exe backend\scripts\run_review_worker.py --once` 手动处理一批。`status`/`ensure` 错误不会输出连接密码。
 
 ## 测试库与备份
 
