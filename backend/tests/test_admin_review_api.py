@@ -66,6 +66,30 @@ def test_admin_review_api_requires_key_and_supports_the_queue(
         assert missing.status_code == 404
 
 
+def test_admin_bulk_dismisses_new_cases(postgresql_database, monkeypatch):
+    owner = fixture_owner("b3")
+    run_id = completed_run(owner, "review-api-bulk")
+    downvote(owner, run_id)
+    service = ReviewCaseService()
+    service.aggregate_signals(limit=10)
+    case = service.list_cases()[0]
+    monkeypatch.setenv("LIMITUPLAB_ADMIN_KEY", "t" * 32)
+    headers = {"X-LimitUpLab-Admin-Key": "t" * 32}
+
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/admin/review/cases/bulk-dismiss",
+            headers=headers,
+            json={"case_ids": [case.case_id], "note": "批量驳回：正常波动"},
+        )
+        assert response.status_code == 200
+        assert response.json() == {"dismissed": 1, "skipped": 0}
+        detail = client.get(
+            f"/api/admin/review/cases/{case.case_id}", headers=headers,
+        )
+        assert detail.json()["status"] == "dismissed"
+
+
 def test_admin_review_rejects_conflicting_revisions(postgresql_database, monkeypatch):
     owner = fixture_owner("b2")
     run_id = completed_run(owner, "review-api-conflict")

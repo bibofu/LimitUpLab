@@ -9,6 +9,8 @@ from fastapi.responses import PlainTextResponse
 
 from app.repositories import AnswerFeedbackRepository
 from app.review_models import (
+    ReviewBulkDismissRequest,
+    ReviewBulkDismissResponse,
     ReviewCaseDetail,
     ReviewCaseUpdate,
     ReviewCasesResponse,
@@ -90,6 +92,20 @@ def update_review_case(
         ) from None
     except ReviewCaseValidationError as error:
         raise HTTPException(status_code=400, detail=str(error)) from None
+
+
+@router.post("/cases/bulk-dismiss", response_model=ReviewBulkDismissResponse)
+def bulk_dismiss_review_cases(
+    payload: ReviewBulkDismissRequest,
+    _admin: Annotated[None, Depends(require_admin_access)],
+) -> ReviewBulkDismissResponse:
+    """Dismiss several new cases with one shared audit note."""
+
+    try:
+        result = ReviewCaseService().bulk_dismiss(payload.case_ids, payload.note)
+    except ReviewCaseValidationError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from None
+    return ReviewBulkDismissResponse(**result)
 
 
 @router.get("/cases/{case_id}/export", response_class=PlainTextResponse)

@@ -362,6 +362,40 @@ class ReviewCaseService:
             raise ReviewCaseNotFound(case_id)
         return detail
 
+    def bulk_dismiss(
+        self,
+        case_ids: list[str],
+        note: str,
+        *,
+        actor: str = "admin",
+    ) -> dict[str, int]:
+        """Dismiss only cases still awaiting review; skip every other status."""
+
+        explanation = note.strip()
+        if not explanation:
+            raise ReviewCaseValidationError("审核说明不能为空")
+        dismissed = 0
+        skipped = 0
+        for case_id in dict.fromkeys(case_ids):
+            detail = self.get_case(case_id)
+            if detail is None or detail.status != "new":
+                skipped += 1
+                continue
+            try:
+                self.update_case(
+                    case_id,
+                    ReviewCaseUpdate(
+                        status="dismissed",
+                        note=explanation,
+                        revision=detail.revision,
+                    ),
+                    actor=actor,
+                )
+                dismissed += 1
+            except (ReviewCaseConflict, ReviewCaseValidationError):
+                skipped += 1
+        return {"dismissed": dismissed, "skipped": skipped}
+
     def export_markdown(self, case_id: str) -> str:
         """Render one confirmed case in the existing badCase.md format."""
 

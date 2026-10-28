@@ -143,6 +143,26 @@ def test_case_updates_require_revision_and_required_fields(postgresql_database):
         )
 
 
+def test_bulk_dismiss_only_new_cases(postgresql_database):
+    owner = fixture_owner("p2k")
+    first = completed_run(owner, "review-bulk-one")
+    second = completed_run(owner, "review-bulk-two")
+    downvote(owner, first)
+    downvote(owner, second)
+    service = ReviewCaseService()
+    service.aggregate_signals(limit=10)
+    case_ids = [item.case_id for item in service.list_cases()]
+
+    result = service.bulk_dismiss(case_ids, "批量驳回：已验证为正常波动")
+    assert result == {"dismissed": 2, "skipped": 0}
+    assert {item.status for item in service.list_cases()} == {"dismissed"}
+    detail = service.get_case(case_ids[0])
+    assert detail.events[-1].note == "批量驳回：已验证为正常波动"
+    assert service.bulk_dismiss(case_ids, "再次驳回") == {
+        "dismissed": 0, "skipped": 2,
+    }
+
+
 def test_export_requires_reviewed_case_and_omits_owner(postgresql_database):
     owner = fixture_owner("p2e")
     run_id = completed_run(owner, "review-case-export")

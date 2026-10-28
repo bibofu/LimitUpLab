@@ -137,6 +137,22 @@ class ReviewCaseUpdate(BaseModel):
     revision: int = Field(ge=1)
 
 
+class ReviewBulkDismissRequest(BaseModel):
+    """Dismiss several new cases with one shared audit note."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    case_ids: list[str] = Field(min_length=1, max_length=100)
+    note: str = Field(min_length=1, max_length=2000)
+
+
+class ReviewBulkDismissResponse(BaseModel):
+    """Counts from one bulk dismissal request."""
+
+    dismissed: int
+    skipped: int
+
+
 class ReviewFeedbackRow(BaseModel):
     """One owner vote shown in the administrator feedback list."""
 
