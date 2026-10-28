@@ -8,6 +8,7 @@ import {
   fetchReviewCases,
   fetchReviewFeedback,
   fetchReviewJobs,
+  fetchObservabilitySummary,
   recheckReviewRun,
   sampleReviewRuns,
   updateReviewCase,
@@ -22,6 +23,8 @@ import type {
   ReviewSource,
   ReviewStatus,
 } from "../reviewTypes";
+import type { ObservabilitySummary } from "../observabilityTypes";
+import { ObservabilityOverview } from "../components/ObservabilityOverview";
 import { FEEDBACK_REASON_OPTIONS } from "../utils/answerFeedback";
 import {
   REVIEW_SEVERITY_OPTIONS,
@@ -40,7 +43,7 @@ import {
 } from "../utils/reviewAdmin";
 import "../adminReview.css";
 
-type ReviewTab = "cases" | "feedback" | "jobs";
+type ReviewTab = "overview" | "cases" | "feedback" | "jobs";
 
 interface ReviewFilters {
   status: ReviewStatus | "";
@@ -64,8 +67,9 @@ function valueText(value: unknown): string {
 export function AdminReviewPage() {
   const [adminKey, setAdminKey] = useState("");
   const [keyDraft, setKeyDraft] = useState("");
-  const [tab, setTab] = useState<ReviewTab>("cases");
+  const [tab, setTab] = useState<ReviewTab>("overview");
   const [filters, setFilters] = useState<ReviewFilters>(EMPTY_FILTERS);
+  const [summary, setSummary] = useState<ObservabilitySummary | null>(null);
   const [cases, setCases] = useState<ReviewCaseSummary[]>([]);
   const [feedback, setFeedback] = useState<ReviewFeedbackRow[]>([]);
   const [jobs, setJobs] = useState<ReviewJob[]>([]);
@@ -84,14 +88,16 @@ export function AdminReviewPage() {
     setLoading(true);
     setError("");
     try {
-      const [caseResponse, feedbackResponse, jobResponse] = await Promise.all([
+      const [caseResponse, feedbackResponse, jobResponse, summaryResponse] = await Promise.all([
         fetchReviewCases(key, { ...current, limit: 100 }),
         fetchReviewFeedback(key),
         fetchReviewJobs(key),
+        fetchObservabilitySummary(key, 7),
       ]);
       setCases(caseResponse.cases);
       setFeedback(feedbackResponse.feedback);
       setJobs(jobResponse.jobs);
+      setSummary(summaryResponse);
     } catch (caught) {
       setError(reviewErrorMessage(caught));
       if (reviewAuthFailure(caught)) setAdminKey("");
@@ -126,6 +132,7 @@ export function AdminReviewPage() {
     setCases([]);
     setFeedback([]);
     setJobs([]);
+    setSummary(null);
     setSelectedId(null);
     setDetail(null);
     setForm(null);
@@ -312,6 +319,7 @@ export function AdminReviewPage() {
 
       <nav className="admin-review-tabs" aria-label="审核台页签">
         {([
+          ["overview", "概览"],
           ["cases", `案例 ${cases.length}`],
           ["feedback", `反馈 ${feedback.length}`],
           ["jobs", `任务 ${jobs.length}`],
@@ -329,6 +337,12 @@ export function AdminReviewPage() {
 
       {error ? <div className="admin-review-notice error" role="alert">{error}</div> : null}
       {notice ? <div className="admin-review-notice" role="status">{notice}</div> : null}
+
+      {tab === "overview" ? (
+        summary
+          ? <ObservabilityOverview summary={summary} />
+          : <p className="admin-review-empty">{loading ? "加载中…" : "暂无概览数据"}</p>
+      ) : null}
 
       {tab === "cases" ? (
         <section className="admin-review-cases">

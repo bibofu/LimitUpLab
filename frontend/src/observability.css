@@ -1,0 +1,147 @@
+.obs-overview {
+  display: grid;
+  gap: 16px;
+}
+
+.obs-period h2 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.obs-period p {
+  margin: 4px 0 0;
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.obs-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+
+.obs-grid-secondary {
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+}
+
+.obs-kpi {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  border: 1px solid #e9edf2;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.obs-kpi > span {
+  color: #6b7280;
+  font-size: 12px;
+}
+
+.obs-kpi > strong {
+  color: #202938;
+  font-size: 22px;
+  line-height: 1.2;
+}
+
+.obs-kpi > small {
+  color: #6b7280;
+  font-size: 11px;
+}
+
+.obs-panel {
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid #e9edf2;
+  border-radius: 10px;
+  background: #ffffff;
+}
+
+.obs-panel h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+.obs-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+
+.obs-table th,
+.obs-table td {
+  padding: 6px 8px;
+  border-bottom: 1px solid #eef1f5;
+  text-align: left;
+  vertical-align: middle;
+}
+
+.obs-table th {
+  color: #6b7280;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.obs-date {
+  color: #6b7280;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: nowrap;
+}
+
+.obs-bar-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 120px;
+}
+
+.obs-bar {
+  display: inline-block;
+  height: 7px;
+  min-width: 1px;
+  border-radius: 4px;
+  background: #7aa2e8;
+}
+
+.obs-bar-down {
+  background: #e29a93;
+}
+
+.obs-columns {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+}
+
+.obs-list {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  font-size: 12px;
+}
+
+.obs-list li {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid #f1f4f8;
+  color: #475569;
+}
+
+.obs-list li:last-child {
+  border-bottom: 0;
+  padding-bottom: 0;
+}
+
+.obs-notes ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding-left: 18px;
+  color: #6b7280;
+  font-size: 12px;
+  line-height: 1.6;
+}
