@@ -817,12 +817,6 @@ td span {
   color: #374151;
 }
 
-.answer-feedback-actions button[aria-pressed="true"] {
-  border-color: #cbd5e1;
-  background: #eef2f7;
-  color: #1f2937;
-}
-
 .answer-feedback-actions button:disabled {
   cursor: wait;
   opacity: 0.6;
@@ -833,20 +827,21 @@ td span {
   min-height: 38px;
   justify-content: center;
   padding: 0;
-  border-color: #dbe2ea;
-  background: #ffffff;
-  color: #475569;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #94a3b8;
 }
 
 .answer-feedback-actions .answer-feedback-vote:hover:not(:disabled) {
-  border-color: #94a3b8;
-  background: #f8fafc;
-  color: #1f2937;
+  border: 0;
+  background: transparent;
+  color: #475569;
 }
 
 .answer-feedback-actions .answer-feedback-vote[aria-pressed="true"] {
-  border-color: #1d4ed8;
-  background: #eef4ff;
+  border: 0;
+  background: transparent;
   color: #1d4ed8;
 }
 
