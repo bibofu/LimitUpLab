@@ -1,5 +1,12 @@
 # Agent 问答回归记录
 
+## 2026-10-29：走势问题误用综合动态工具，分页读取导致 partial 和 15.9s
+
+- 原表现：`run_5497000d5c0a44c290eaaffc13c16ace`（“贵州茅台最近走势怎么样”）只调用 `stock_activity`，随后连续 3 次 `read_tool_result`，首次因整行和来源元数据超过上下文预算报错；最终 `task_status=partial`，耗时 15.9s，Langfuse 中产生 7 个 generation。
+- 原因：`stock_activity` 的模型视图把 20 根 `kline.bars`（约 8k 字符）放进单行，触发 manifest 分页；`stock_kline` 与 `stock_activity` 的工具描述没有区分“纯走势”和“综合动态”，模型选择了综合工具。
+- 修复：`stock_activity` 模型视图移除 `kline.bars`、新闻限制为 8 条，并提示逐日 K 线用 `stock_kline`、完整原始结果用 `read_tool_result`；`stock_kline` 和 `stock_activity` 描述明确职责；profile 路由把走势问题限定到 `stock` 工具集。后续提示词精简移除了重复的走势规则，约束由工具描述和 compact view 承担。
+- 验证：同一问题复验只调用 `stock_kline`，耗时 11.0–11.7s、4 个 generation；“走势和最新新闻”使用 `stock_kline` + `stock_news`，10.3s；财务、指数、公司资料三类真实问题均 `complete`。修复后后端全量 2136 passed、1 skipped、22 subtests passed；提示词精简后 2129 passed、1 skipped、22 subtests passed。提交 `8c1fd67`、`fa0153f`、`e01da5f`。
+
 ## 2026-10-28：20 问复跑暴露比率重算、K线/指数回指和回顾对象错误
 
 - 原表现：新会话 `chat_rerun_41592a2fd1b347f8951d99e6ea85ba92` 中，Q4 把 `limit_up_events` 的 69 条触板事件误当成“收盘封住”，再加 28 条 broken_board 得到 97，算成 41/97、28/97；正确应为 56/69、28/69。Q10/Q15 对上一轮 K 线/指数回答返回 `clarify/reference_ambiguous`。Q13 的涨停/炸板事件问题被守卫误判为需要 `stock_kline`。Q19 缺少龙虎榜追问股票，Q20 把该股票错误写成凯众股份 603037 而不是天娱数科 002354。
