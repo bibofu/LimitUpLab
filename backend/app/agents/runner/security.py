@@ -96,6 +96,7 @@ def review_input_security(
             [TOOL],
             timeout_seconds=max(1, timeout_seconds),
             max_tokens=1024,
+            stage="input_security",
         )
         if (len(response.tool_calls) != 1
                 or response.tool_calls[0]["name"] != "submit_input_security_review"):

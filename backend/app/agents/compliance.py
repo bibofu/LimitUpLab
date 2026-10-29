@@ -47,6 +47,7 @@ def review_answer(provider, *, user_message: str, answer: str, timeout_seconds: 
         [tool],
         timeout_seconds=max(1, timeout_seconds),
         max_tokens=512,
+        stage="compliance",
     )
     if (response.response_metadata or {}).get("finish_reason") in {"length", "content_filter"}:
         raise ValueError("Compliance review did not finish")

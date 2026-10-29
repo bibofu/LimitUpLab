@@ -133,6 +133,7 @@ class AgentRunner:
                 timeout_seconds=max(1, min(35, self.deadline - perf_counter())),
                 max_tokens=4096,
                 tool_choice="none" if repairing else "auto",
+                stage="agent",
                 on_chunk=on_chunk,
             )
         except Exception as error:  # noqa: BLE001 - runner boundary reports the failure

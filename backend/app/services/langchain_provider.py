@@ -114,15 +114,22 @@ class LangChainChatProvider(LLMProvider):
         self, messages, tools, *, timeout_seconds=30, max_tokens=4096,
         on_chunk: Callable[[AIMessageChunk], None] | None = None,
         tool_choice: str | None = None,
+        stage: str | None = None,
     ):
         """Trace one native turn without changing the provider contract."""
 
+        metadata = {
+            "tool_choice": tool_choice,
+            "streaming": on_chunk is not None,
+        }
+        if stage:
+            metadata["stage"] = stage
         with get_agent_tracer().generation(
             name="react_decision",
             model=self.model,
             input=_trace_messages(messages),
             parameters={"max_tokens": max_tokens, "tool_count": len(tools)},
-            metadata=trace_metadata({"tool_choice": tool_choice, "streaming": on_chunk is not None}),
+            metadata=trace_metadata(metadata),
         ) as generation:
             message, usage = self._generate_messages(
                 messages, tools,

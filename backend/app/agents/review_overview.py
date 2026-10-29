@@ -270,6 +270,7 @@ def generate_overview(*, facts, provider, emit, stopped=lambda: False):
                 [{"type": "function", "function": {"name": "submit_overview_check", "description": "核验复盘总结",
                                                      "parameters": OverviewCheck.model_json_schema()}}],
                 timeout_seconds=20, max_tokens=512,
+                stage="review_overview",
             )
             check_active()
             if len(review.tool_calls) != 1 or review.tool_calls[0]["name"] != "submit_overview_check":

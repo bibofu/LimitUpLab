@@ -32,6 +32,7 @@ TRACE_FIELDS = frozenset({
     "memory_hit_count", "memory_tokens", "long_term_memory_tokens", "summary_triggered",
     "estimated_input_tokens", "tool_call_id", "tool_name", "receipt_reused", "tool_count",
     "tool_results", "model_rounds", "tool_choice", "streaming", "input_token_budget",
+    "stage",
 })
 
 

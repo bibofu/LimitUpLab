@@ -116,6 +116,16 @@ def test_native_turn_reports_tool_calls_as_generation_output():
     assert result.tool_calls[0]["id"] == "call_1"
 
 
+def test_native_turn_records_stage_metadata():
+    tracer = RecordingTracer()
+    agent_tracing._tracer = tracer
+    provider = _provider(AIMessage(content="ok"))
+
+    provider.generate_messages([HumanMessage(content="研究")], [], stage="agent")
+
+    assert tracer.generations[0].kwargs["metadata"]["stage"] == "agent"
+
+
 def test_tool_execution_reports_empty_status_from_cache(world):
     tracer = RecordingTracer()
     agent_tracing._tracer = tracer
