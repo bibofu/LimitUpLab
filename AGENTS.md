@@ -17,6 +17,7 @@ LimitUpLab 是一个面向 A 股收盘后短线研究的涨停与首板复盘系
 - Agent 实际验证：每次进行agent修改后，都要进行实际验证，至少保证三个简单问题的回答完全完成。
 - 配置与密钥安全：真实 API Key、生产 `.env`、本地数据库和生成报告不得提交；示例配置使用 `.example` 文件。
 - Git 约定：每完成一次代码或文档修改，就执行一次 git commit，每次进行源代码的commit，修改不超过1000行；提交时只纳入本次任务相关文件，不夹带无关本地数据或用户改动。
+- 本地 debug trace 约定：回答下方的 Run trace 调试面板及其配套代码（`frontend/src/components/AgentRunDebugTrace.tsx`、`frontend/src/agentDebugTrace.ts`、`frontend/src/agentDebugTrace.css`、`frontend/src/api.ts` 中的 `fetchAgentRunTrace`，以及 `backend/app/routers/agents.py` 中的 `/chat/runs/{run_id}/trace` 调试接口）只用于本地排查，不得提交进 git。提交前检查 `git status`；同一文件混有业务改动时使用 `git add -p` 只暂存业务部分。
 - Agent 问答约定：每次修复一个 Agent 问答问题后，都要在 `badCase.md` 中新增一条记录。
 - 问题修复约定：修改一个问题时，拒绝使用正则覆盖来解决，同时考虑会不会引入新的问题，对修复方案不确定时可以反问
 - 方案变更约定：进行规划、或修复问题时，从第一性原理出发，优先考虑最优解
