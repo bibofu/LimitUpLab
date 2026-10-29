@@ -241,7 +241,7 @@ RESEARCH_TOOL_SCHEMAS = [
         dates=("end_date",),
         collection="bars",
         notes="return_Nd_pct=(last close / close N trading intervals earlier - 1)*100. N displayed bars span N-1 intervals, not N intervals. trend is an MA-based label, not a claim that every recent day rose.",
-        description="读取指定股票最近一段时间的日 K 线、均线、区间涨跌、量能和最大回撤，用于回答个股走势问题。",
+        description="读取指定股票最近一段时间的日 K 线、均线、区间涨跌、量能和最大回撤，用于回答个股走势问题；新闻或综合动态问题使用 stock_activity。",
         args_schema={
             "type": "object",
             "properties": {

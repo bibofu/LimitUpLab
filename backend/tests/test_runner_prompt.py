@@ -112,3 +112,11 @@ def test_prompt_requires_market_summary_for_opening_and_unsealed_rates():
 def test_prompt_requires_limit_up_events_for_event_records():
     prompt = system_prompt(V1_TOOLS)
     assert "个股涨停或炸板事件记录必须调用 limit_up_events" in prompt
+
+
+def test_stock_trend_rule_requires_both_tools():
+    both = system_prompt({"stock_kline", "stock_activity"})
+    assert "stock_activity 只用于" in both
+
+    only_kline = system_prompt({"stock_kline"})
+    assert "stock_activity 只用于" not in only_kline

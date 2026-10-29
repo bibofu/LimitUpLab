@@ -55,8 +55,10 @@ NEWS_TOOL_SCHEMAS = [
         time_mode="latest_local_and_current",
         notes="Combines latest available local K-lines with current news. Not historical as-of evidence.",
         description=(
-            "汇总一只 A 股的近期收盘走势、涨停记录、评分补充事实和个股新闻。"
-            "用于‘最近有什么动态、发生了什么、近况如何’等综合个股问题。"
+            "汇总一只 A 股的近期动态、涨停记录、评分补充事实和个股新闻。"
+            "用于‘最近有什么动态、发生了什么、近况如何’等综合个股问题；"
+            "单纯走势、K线、均线、量能、回撤问题请使用 stock_kline。"
+            "返回的K线是摘要，逐日K线请使用 stock_kline。"
         ),
         args_schema={
             "type": "object",

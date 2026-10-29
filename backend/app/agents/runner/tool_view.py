@@ -32,6 +32,26 @@ def business_definitions(gateway, allowed: frozenset[str] | set[str] | None = No
     return definitions
 
 
+def _compact_stock_activity(row: dict[str, Any]) -> dict[str, Any]:
+    """Keep the activity summary without duplicating a full K-line series."""
+
+    compact = dict(row)
+    kline = compact.get("kline")
+    if isinstance(kline, dict):
+        compact["kline"] = {
+            key: value for key, value in kline.items() if key != "bars"
+        }
+        compact["kline"]["bars_omitted"] = True
+    news = compact.get("news")
+    if isinstance(news, dict) and isinstance(news.get("items"), list):
+        compact["news"] = {**news, "items": news["items"][:8]}
+    compact["model_note"] = (
+        "此综合动态视图只保留K线摘要；需要逐日K线时调用 stock_kline，"
+        "需要完整原始结果时使用 read_tool_result。"
+    )
+    return compact
+
+
 def model_result(name: str, result, payload: Any, status: str, *, arguments=None, allowed_arguments=None) -> dict[str, Any]:
     """Expose every contracted fact once, without applying another row limit."""
 
@@ -41,6 +61,8 @@ def model_result(name: str, result, payload: Any, status: str, *, arguments=None
         if status != "error":
             raise
         rows = []
+    if name == "stock_activity":
+        rows = [_compact_stock_activity(row) for row in rows if isinstance(row, dict)]
     metadata = payload if isinstance(payload, dict) else {}
     truncated = bool(metadata.get("truncated") or metadata.get("source_truncated"))
     incomplete = (

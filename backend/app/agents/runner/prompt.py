@@ -35,6 +35,12 @@ STOCK_PROFILE_RULE = (
     "不把不同来源的行业混为一个；不提供买卖、仓位或目标价建议。"
 )
 
+STOCK_TREND_RULE = (
+    "个股走势、K线、均线、量能、最大回撤问题使用 stock_kline；"
+    "stock_activity 只用于同时需要近期动态、涨停记录或个股新闻的综合问题，"
+    "不要用它替代单纯走势查询。"
+)
+
 def _index_rule(enabled_tools: set[str]) -> str | None:
     """Describe only the index capabilities actually exposed in this profile."""
 
@@ -87,6 +93,8 @@ def _capability_rules(enabled_tools: set[str]) -> list[str]:
         rules.append(index_rule)
     if "stock_profile" in enabled_tools:
         rules.append(STOCK_PROFILE_RULE)
+    if {"stock_kline", "stock_activity"} <= enabled_tools:
+        rules.append(STOCK_TREND_RULE)
     return rules
 
 
