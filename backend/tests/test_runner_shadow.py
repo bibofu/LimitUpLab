@@ -77,8 +77,8 @@ def registry() -> AgentToolRegistry:
     )
 
 
-def request(message: str = "最新交易日涨停多少只？") -> AgentChatRequest:
-    return AgentChatRequest(session_id="shadow-test", message=message)
+def request(message: str = "最新交易日涨停多少只？", *, symbol: str | None = None) -> AgentChatRequest:
+    return AgentChatRequest(session_id="shadow-test", message=message, symbol=symbol)
 
 
 def test_runner_calls_one_tool_and_returns_model_readable_result():
@@ -148,13 +148,17 @@ def test_runner_records_round_context_and_definition_cost():
     assert second.cached_tokens == 600
 
 
-def test_runner_prompt_matches_the_enabled_tool_set():
+def test_runner_prompt_matches_the_selected_tool_profile():
     provider = ScriptedProvider([AIMessage(content="你好。")])
-    NodeRunner(request("你好"), registry(), provider).run_nodes()
+    NodeRunner(request("2026-10-28 涨停家数"), registry(), provider).run_nodes()
     system = provider.calls[0][0].content
 
-    assert "index_quote" in system
-    assert "stock_financials" in system
+    assert "market_summary" in system
+    assert "limit_up_events" in system
+    tool_names = {item["function"]["name"] for item in provider.options[0]["tools"]}
+    assert "market_summary" in tool_names
+    assert "stock_financials" not in tool_names
+    assert "post_limit_screen" not in tool_names
 
     extended = ScriptedProvider([AIMessage(content="你好。")])
     extended_registry = AgentToolRegistry(
@@ -163,9 +167,12 @@ def test_runner_prompt_matches_the_enabled_tool_set():
         hithink_collector=SimpleNamespace(),
         profile=EXTENDED_AGENT_PROFILE,
     )
-    NodeRunner(request("你好"), extended_registry, extended).run_nodes()
+    NodeRunner(request("600519 最新财务", symbol="600519"), extended_registry, extended).run_nodes()
 
     assert "stock_financials" in extended.calls[0][0].content
+    extended_tools = {item["function"]["name"] for item in extended.options[0]["tools"]}
+    assert "stock_financials" in extended_tools
+    assert "post_limit_screen" not in extended_tools
 
 
 def test_runner_answers_without_a_tool():

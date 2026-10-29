@@ -15,11 +15,13 @@ def dump(value: Any) -> str:
     return json.dumps(value, ensure_ascii=False, default=str)
 
 
-def business_definitions(gateway) -> list[dict[str, Any]]:
-    """Return only business tool definitions, never runtime control tools."""
+def business_definitions(gateway, allowed: frozenset[str] | set[str] | None = None) -> list[dict[str, Any]]:
+    """Return business tool definitions, optionally limited to one profile."""
 
     definitions = []
     for name, tool in gateway.structured.items():
+        if allowed is not None and name not in allowed:
+            continue
         parameters = tool.args_schema.model_json_schema()
         parameters["additionalProperties"] = False
         definitions.append({"type": "function", "function": {

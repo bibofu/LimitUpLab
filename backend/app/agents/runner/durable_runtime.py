@@ -210,6 +210,7 @@ def _agent(state, deps):
         diagnostics = {**built.diagnostics, "thread_id": deps.control.row["session_id"],
                        "run_id": deps.control.row["run_id"], "prompt_version": PROMPT_VERSION,
                        "summary_triggered": bool(conversation.get("summary_triggered")),
+                       "tool_profile": runner.tool_profile_name,
                        "recovery_count": deps.control.row.get("recovery_count", 0)}
         with trace_context(**diagnostics):
             update = runner.agent({**state, "messages": built.messages, "context_diagnostics": diagnostics})

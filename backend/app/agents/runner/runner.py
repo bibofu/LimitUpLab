@@ -24,6 +24,7 @@ from app.agents.runner.guardrails import (
     derived_status,
     requires_compliance_review,
 )
+from app.agents.tool_profiles import ToolProfile, resolve_tool_profile
 from app.agents.runner.prompt import build_system_prompt
 from app.agents.runner.result import RunnerResult
 from app.agents.runner.tool_view import business_definitions, dump, model_result
@@ -83,12 +84,24 @@ class AgentRunner:
         deadline_seconds: float = DEADLINE_SECONDS,
         review_all_answers: bool = False,
         progress=None,
+        tool_profile: ToolProfile | None = None,
     ):
         self.request = request
         self.history = history or []
         self.provider = provider
         self.gateway = BusinessToolGateway(registry)
-        self.definitions = [*business_definitions(self.gateway), READ_RESULT_DEFINITION]
+        profile = tool_profile or resolve_tool_profile(request)
+        enabled = set(getattr(registry, "enabled_tool_names", profile.tools))
+        selected = profile.tools & enabled
+        if not selected:
+            selected = enabled
+            profile = ToolProfile("full", frozenset(selected))
+        self.tool_profile_name = profile.name
+        self.tool_names = frozenset(selected)
+        self.definitions = [
+            *business_definitions(self.gateway, allowed=self.tool_names),
+            READ_RESULT_DEFINITION,
+        ]
         self.freeze_reference_date(current_query_reference_date())
         self.deadline = perf_counter() + deadline_seconds
         self.started = perf_counter()
@@ -105,7 +118,7 @@ class AgentRunner:
         self.reference_date = reference_date
         self.gateway.reference_date = reference_date
         self.system_prompt = build_system_prompt(
-            reference_date, enabled_tools=set(self.gateway.structured),
+            reference_date, enabled_tools=set(self.tool_names),
         ) + RESULT_READING_RULE
 
     def agent(self, state: RunnerState) -> RunnerState:
