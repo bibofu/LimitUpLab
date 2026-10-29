@@ -443,3 +443,16 @@ test("valid empty pools show zero with an explicit missing date in the stable st
   assert.ok(!html.includes("正在加载"));
   assert.ok(!html.includes("加载失败"));
 });
+
+test("the admin route renders the workspace without the home dashboard or chat", () => {
+  const admin = {
+    AdminReviewPage: () => createElement("section", null, "审核台标记"),
+  };
+  const html = renderApp(
+    "/admin/observability",
+    [pending],
+    { "./pages/AdminReviewPage": admin },
+  );
+  assert.ok(html.includes("审核台标记"));
+  assert.ok(!html.includes("Agent 会话可用"));
+});

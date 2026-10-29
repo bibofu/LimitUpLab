@@ -146,7 +146,9 @@ export function App() {
   const activeView = routeToView[location.pathname] ?? "overview";
   const isStockDetail = location.pathname.startsWith("/stocks/")
     && !stockListPaths.has(location.pathname);
-  const isOverview = activeView === "overview" && !isStockDetail;
+  // The admin workspace is a standalone route; never fall back to the home dashboard.
+  const isAdminReview = location.pathname === "/admin/observability";
+  const isOverview = activeView === "overview" && !isStockDetail && !isAdminReview;
   // Load only visible sections and the local dates required by review/detail.
   const enabled = {
     firstBoard: ["pool", "first", "review"].includes(activeView) && !isStockDetail,
@@ -185,7 +187,7 @@ export function App() {
     }
   }
 
-  const showAgentWorkspace = !isStockDetail
+  const showAgentWorkspace = !isStockDetail && !isAdminReview
     && !agentWorkspaceHiddenPaths.has(location.pathname);
   const activeMeta = isStockDetail
     ? { title: "个股详情", eyebrow: "Stock Detail" }
