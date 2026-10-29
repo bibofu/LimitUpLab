@@ -5,7 +5,12 @@ from __future__ import annotations
 import json
 
 from app.agents.context_builder import build_context
-from app.agents.session_history import build_session_ledger, is_session_recap_query
+from app.agents.session_history import (
+    build_session_ledger,
+    format_session_summary,
+    is_session_recap_query,
+    is_session_summary_query,
+)
 
 
 def test_recap_query_is_detected_without_treating_a_data_query_as_recap():
@@ -144,3 +149,23 @@ def test_recap_question_does_not_become_the_dragon_tiger_followup():
     ]
     facts = build_session_facts(ledger)
     assert facts["dragon_tiger_followup_stock"] == {"symbol": "002354", "name": "天娱数科"}
+
+
+def test_summary_request_is_a_session_recap():
+    assert is_session_recap_query("请总结本次复盘中的主要风险和缺失数据")
+    assert is_session_summary_query("请总结本次复盘中的主要风险和缺失数据")
+    assert not is_session_summary_query("请回顾本会话最先研究的股票")
+
+
+def test_session_summary_lists_turns_and_gaps_without_market_values():
+    summary = format_session_summary([
+        {"question": "本轮市场情绪", "answer_status": "complete",
+         "stop_reason": "answered", "tools": ["market_summary"]},
+        {"question": "近5日对比", "answer_status": "partial",
+         "stop_reason": "answered", "tools": ["limit_up_events"]},
+    ])
+    assert "本会话索引摘要" in summary
+    assert "已提交轮次：2" in summary
+    assert "第 2 轮" in summary
+    assert "market_summary" in summary
+    assert "不含可复核的行情数值" in summary

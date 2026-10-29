@@ -79,3 +79,26 @@ def missing_required_tool(query: str, tool_calls: list[str] | None, status: str 
             and not any(phrase in str(answer) for phrase in _TOOL_MISSING_PHRASES)):
         return False
     return bool(required and required not in set(tool_calls or []))
+
+
+def summary_lacks_tool_evidence(
+    query: str,
+    tool_calls: list[str] | None,
+    status: str | None,
+    *,
+    answer: str | None = None,
+) -> bool:
+    """Whether a session summary restates numbers without current-run evidence.
+
+    A summary may use committed history for objects and statuses, but market
+    values still need a current-run tool result. The deterministic index
+    summary is published instead of the model's numeric recap.
+    """
+
+    if status in _SKIP_STATUSES:
+        return False
+    if not is_session_recap_query(query):
+        return False
+    if tool_calls:
+        return False
+    return answered_with_data_values(answer)

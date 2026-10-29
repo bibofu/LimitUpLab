@@ -143,7 +143,9 @@ def _agent(state, deps):
         runner.deadline = perf_counter() + state["remaining_seconds"]
         started = perf_counter()
         from app.agents.session_history import (
-            format_session_recap, is_session_recap_query, session_facts_cover_query,
+            format_session_recap, format_session_summary,
+            is_session_recap_query, is_session_summary_query,
+            session_facts_cover_query,
         )
         facts = (state.get("conversation") or {}).get("session_facts") or {}
         if (is_session_recap_query(state["current_query"])
@@ -160,6 +162,20 @@ def _agent(state, deps):
                 "status": "answered", "stop_reason": "answered", "done": True,
                 "memory_context_used": False, "display_policies": [],
                 "context_diagnostics": {"session_recap": True},
+                "remaining_seconds": max(
+                    0, state["remaining_seconds"] - (perf_counter() - started)
+                ),
+            }
+        if is_session_summary_query(state["current_query"]):
+            # A broad recap is a deterministic index lookup. Never restate
+            # market values from compressed context; list committed turns,
+            # tools and gaps instead, and ask for a targeted re-query.
+            ledger = (state.get("conversation") or {}).get("session_ledger") or []
+            return {
+                "answer": format_session_summary(ledger),
+                "status": "partial", "stop_reason": "summary_index_only", "done": True,
+                "memory_context_used": False, "display_policies": [],
+                "context_diagnostics": {"session_summary": True},
                 "remaining_seconds": max(
                     0, state["remaining_seconds"] - (perf_counter() - started)
                 ),
@@ -562,7 +578,10 @@ class DurableRuntime:
 
 def result_from_state(state, runner, control):
     from app.agents.result_paging import attach_result_reference
-    from app.agents.grounding import missing_required_tool, required_tool_for_query
+    from app.agents.grounding import (
+        missing_required_tool, required_tool_for_query, summary_lacks_tool_evidence,
+    )
+    from app.agents.session_history import format_session_summary
     from app.repositories.long_term_memory_repository import LongTermMemoryRepository
     from app.repositories.tool_result_repository import ToolResultRepository
     if (not state.get("memory_action")
@@ -579,6 +598,23 @@ def result_from_state(state, runner, control):
             ),
             status="partial",
             stop_reason="tool_evidence_required",
+            memory_action=state.get("memory_action") or None,
+            memory_owner_revision=state.get("memory_owner_revision"),
+            memory_context_fingerprint=state.get("memory_context_fingerprint") or None,
+            memory_context_used=False,
+            duration_ms=round((perf_counter() - runner.started) * 1000),
+        )
+    if (not state.get("memory_action")
+            and not (state.get("context_diagnostics") or {}).get("session_summary")
+            and summary_lacks_tool_evidence(
+                state.get("current_query") or "", state.get("tool_calls"),
+                state.get("status"), answer=state.get("answer"),
+            )):
+        ledger = (state.get("conversation") or {}).get("session_ledger") or []
+        return RunnerResult(
+            answer=format_session_summary(ledger),
+            status="partial",
+            stop_reason="summary_requires_tool_evidence",
             memory_action=state.get("memory_action") or None,
             memory_owner_revision=state.get("memory_owner_revision"),
             memory_context_fingerprint=state.get("memory_context_fingerprint") or None,

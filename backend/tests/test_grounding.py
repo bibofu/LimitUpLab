@@ -5,7 +5,11 @@ from __future__ import annotations
 from time import perf_counter
 from types import SimpleNamespace
 
-from app.agents.grounding import missing_required_tool, required_tool_for_query
+from app.agents.grounding import (
+    missing_required_tool,
+    required_tool_for_query,
+    summary_lacks_tool_evidence,
+)
 from app.agents.runner.durable_runtime import result_from_state
 
 
@@ -127,3 +131,55 @@ def test_tool_unavailable_text_without_numbers_is_still_partial():
     result = _result(query, answer=answer)
     assert result.status == "partial"
     assert result.stop_reason == "tool_evidence_required"
+
+
+def test_summary_recap_without_tools_returns_the_deterministic_index():
+    query = "请总结本次复盘中的主要风险和缺失数据，并区分已验证事实与尚待验证的解释"
+    assert summary_lacks_tool_evidence(
+        query, [], "complete", answer="首板35只，连板4只，涨停39只",
+    )
+
+    state = _state(query, answer="首板35只，连板4只，涨停39只")
+    state["conversation"] = {"session_ledger": [
+        {"question": "本轮市场情绪", "answer_status": "complete",
+         "stop_reason": "answered", "tools": ["market_summary"]},
+        {"question": "近5日对比", "answer_status": "partial",
+         "stop_reason": "answered", "tools": ["limit_up_events"]},
+    ]}
+    result = result_from_state(state, SimpleNamespace(started=perf_counter()), _control())
+
+    assert result.status == "partial"
+    assert result.stop_reason == "summary_requires_tool_evidence"
+    assert "本会话索引摘要" in result.answer
+    assert "第 2 轮" in result.answer
+    assert "35" not in result.answer
+    assert "39" not in result.answer
+
+
+def test_summary_recap_with_a_current_tool_keeps_the_answer():
+    query = "请总结本次复盘中的主要风险和缺失数据"
+    assert not summary_lacks_tool_evidence(
+        query, ["market_summary"], "complete", answer="涨停39只",
+    )
+    result = _result(query, ["market_summary"], answer="涨停39只")
+    assert result.status == "complete"
+    assert result.answer == "涨停39只"
+
+
+def test_non_recap_numeric_answer_is_not_summary_guarded():
+    assert not summary_lacks_tool_evidence(
+        "解释一下这个数字 123", [], "complete", answer="数字是 123",
+    )
+
+
+def test_deterministic_session_summary_is_not_replaced_by_the_guard():
+    query = "请总结本次复盘中的主要风险和缺失数据"
+    summary = "**本会话索引摘要（来自已提交消息，不含可复核的行情数值）**\n- 已提交轮次：1"
+    state = _state(query, answer=summary)
+    state["status"] = "partial"
+    state["stop_reason"] = "summary_index_only"
+    state["context_diagnostics"] = {"session_summary": True}
+    result = result_from_state(state, SimpleNamespace(started=perf_counter()), _control())
+    assert result.status == "partial"
+    assert result.stop_reason == "summary_index_only"
+    assert result.answer == summary

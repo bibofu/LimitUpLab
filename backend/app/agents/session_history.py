@@ -13,6 +13,8 @@ MAX_STOCKS = 8
 _RECAP_TERMS = (
     "回顾本会话", "本会话", "本次会话", "会话回顾", "前面问过",
     "前面查询过", "刚才的会话", "这轮会话", "整个会话",
+    "总结本次", "总结本轮", "本次复盘", "本轮复盘", "这次复盘",
+    "本次对话", "这轮对话", "整体复盘",
 )
 _SYMBOL = re.compile(r"(?<!\d)(\d{6})(?!\d)")
 _DATE = re.compile(r"(?<!\d)(20\d{2}-\d{2}-\d{2})(?!\d)")
@@ -25,11 +27,19 @@ _FACT_QUERY_TERMS = (
     "最先", "最初", "最早", "第一次", "详细研究", "比较过", "指数",
     "龙虎榜", "日期",
 )
+_SUMMARY_TERMS = ("总结", "主要风险", "缺失数据", "整体复盘")
 
 
 def is_session_recap_query(query: str) -> bool:
     text = str(query or "")
     return any(term in text for term in _RECAP_TERMS)
+
+
+def is_session_summary_query(query: str) -> bool:
+    """Whether a recap asks for a broad session summary rather than one fact."""
+
+    text = str(query or "")
+    return is_session_recap_query(text) and any(term in text for term in _SUMMARY_TERMS)
 
 
 def session_facts_cover_query(query: str) -> bool:
@@ -194,4 +204,33 @@ def format_session_recap(facts: dict[str, Any] | None) -> str:
         label = f"{name}（{dragon['symbol']}）" if name else dragon["symbol"]
         lines.append(f"- 龙虎榜追问的股票：{label}")
     lines.append("说明：以上是会话对象索引，不是本轮行情证据；具体数值需重新查询。")
+    return "\n".join(lines)
+
+
+def format_session_summary(ledger: list[dict[str, Any]] | None) -> str:
+    """Summarize the committed turn index without restating market values."""
+
+    turns = ledger or []
+    lines = ["**本会话索引摘要（来自已提交消息，不含可复核的行情数值）**"]
+    if not turns:
+        lines.append("- 暂无可用的已提交轮次索引。")
+    else:
+        lines.append(f"- 已提交轮次：{len(turns)}")
+        for index, turn in enumerate(turns, start=1):
+            question = _text(turn.get("question"), 120)
+            status = str(turn.get("answer_status") or "unknown")
+            tools = "、".join(turn.get("tools") or []) or "无工具"
+            lines.append(f"  {index}. {question} — {status}；工具：{tools}")
+        incomplete = [
+            f"第 {index} 轮（{turn.get('answer_status') or 'unknown'}"
+            f"{'，' + str(turn.get('stop_reason')) if turn.get('stop_reason') else ''}）"
+            for index, turn in enumerate(turns, start=1)
+            if turn.get("answer_status") in {"partial", "error"}
+        ]
+        if incomplete:
+            lines.append("- 待复核/存在缺口的轮次：" + "；".join(incomplete))
+    lines.append(
+        "说明：以上只是会话索引，不包含本轮可复核的市场数值；"
+        "请指定要核实的对象和日期重新查询。"
+    )
     return "\n".join(lines)
