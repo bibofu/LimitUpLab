@@ -56,17 +56,6 @@ READ_RESULT_DEFINITION = {"type": "function", "function": {
     "parameters": ReadModelResultRequest.model_json_schema(),
 }}
 
-RESULT_READING_RULE = (
-    "\n工具大结果可能返回 result_view.kind=manifest；这表示完整原始结果已持久化，但当前模型尚未读取股票行。"
-    "可用 read_tool_result 按需读取已保存的行或元数据，不要重新查询市场来分页。传入 result_id，"
-    "并将 manifest 的 content_hash 填入 expected_hash；"
-    "每页保留原始顺序、总行数、next_offset及来源。用户要完整名单时必须读取覆盖全部所需行和字段，"
-    "不能把预览、单页或未读部分说成完整名单；预算不够时明确哪些部分未完成。"
-    "字段未投影、字段缺失和明确null是不同状态，均不能补造数值。"
-    "查询排序后第N条时优先用offset=N-1、limit=1精确读取。分页视图的row_position.field指明"
-    "服务端计算的全局行号列，从1开始；按该列定位，不自行数页内行，也不把该列当作业务排名指标。"
-)
-
 
 def content_hash(value):
     return sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False,

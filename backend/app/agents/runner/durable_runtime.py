@@ -31,7 +31,7 @@ from app.services.agent_stream import NativeStreamBridge, emit_status, emit_tool
 from app.services.agent_tracing import trace_context, trace_stage
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "durable-react-v5-row-positions"
+PROMPT_VERSION = "durable-react-v6-compact-prompt"
 logger = logging.getLogger(__name__)
 _runtime = None
 

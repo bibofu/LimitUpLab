@@ -153,8 +153,7 @@ def test_runner_prompt_matches_the_selected_tool_profile():
     NodeRunner(request("2026-10-28 涨停家数"), registry(), provider).run_nodes()
     system = provider.calls[0][0].content
 
-    assert "market_summary" in system
-    assert "limit_up_events" in system
+    assert "工具" in system
     tool_names = {item["function"]["name"] for item in provider.options[0]["tools"]}
     assert "market_summary" in tool_names
     assert "stock_financials" not in tool_names
@@ -169,7 +168,6 @@ def test_runner_prompt_matches_the_selected_tool_profile():
     )
     NodeRunner(request("600519 最新财务", symbol="600519"), extended_registry, extended).run_nodes()
 
-    assert "stock_financials" in extended.calls[0][0].content
     extended_tools = {item["function"]["name"] for item in extended.options[0]["tools"]}
     assert "stock_financials" in extended_tools
     assert "post_limit_screen" not in extended_tools

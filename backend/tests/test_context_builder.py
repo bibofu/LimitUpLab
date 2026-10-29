@@ -115,7 +115,7 @@ def test_production_catalog_leaves_room_for_a_full_first_board_result(profile, m
 
     from datetime import date
 
-    from app.agents.result_paging import READ_RESULT_DEFINITION, RESULT_READING_RULE
+    from app.agents.result_paging import READ_RESULT_DEFINITION
     from app.agents.runner.gateway import BusinessToolGateway
     from app.agents.runner.prompt import build_system_prompt
     from app.agents.runner.tool_view import business_definitions
@@ -124,9 +124,7 @@ def test_production_catalog_leaves_room_for_a_full_first_board_result(profile, m
     registry = AgentToolRegistry(events=[], first_board_repository=object(), profile=profile)
     gateway = BusinessToolGateway(registry)
     definitions = business_definitions(gateway) + [READ_RESULT_DEFINITION]
-    system_prompt = build_system_prompt(
-        date(2026, 10, 23), enabled_tools=set(gateway.structured),
-    ) + RESULT_READING_RULE
+    system_prompt = build_system_prompt(date(2026, 10, 23))
     symbols = [f"{index:06d}" for index in range(1, 69)]
     conversation = {
         "conversation_summary": "此前讨论 2026-10-23 首板名单，并确认按股票代码升序查看。" * 4,

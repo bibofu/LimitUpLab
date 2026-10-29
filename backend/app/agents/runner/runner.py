@@ -29,7 +29,7 @@ from app.agents.runner.prompt import build_system_prompt
 from app.agents.runner.result import RunnerResult
 from app.agents.runner.tool_view import business_definitions, dump, model_result
 from app.agents.result_paging import (
-    PAGE_TOKEN_BUDGET, READ_RESULT_DEFINITION, READ_RESULT_TOOL, RESULT_READING_RULE,
+    PAGE_TOKEN_BUDGET, READ_RESULT_DEFINITION, READ_RESULT_TOOL,
     ReadModelResultRequest, ResultPageError, model_observation,
 )
 from app.services.agent_tracing import get_agent_tracer
@@ -117,9 +117,7 @@ class AgentRunner:
         """A resumed request keeps the date against which its intent was read."""
         self.reference_date = reference_date
         self.gateway.reference_date = reference_date
-        self.system_prompt = build_system_prompt(
-            reference_date, enabled_tools=set(self.tool_names),
-        ) + RESULT_READING_RULE
+        self.system_prompt = build_system_prompt(reference_date)
 
     def agent(self, state: RunnerState) -> RunnerState:
         """Ask the model to either call tools or produce the final answer."""
