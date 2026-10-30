@@ -605,7 +605,8 @@ export function AgentChatDock({
     const canRestart = response.task_status === "error" || response.task_status === "cancelled";
     // Only reveal text the reader has not already seen; a streamed answer must
     // stay in place when its status and metadata are finalized.
-    setRevealingMessageId(options.reveal !== false && !canRestart ? id : null);
+    const reveal = options.reveal ?? !draftId;
+    setRevealingMessageId(reveal && !canRestart ? id : null);
     setFailedPrompt(canRestart ? prompt ?? null : null);
     setError(canRestart ? (response.task_status === "cancelled" ? "任务已取消，可重新提问。" : "本次研究未完成，可重新提问。") : null);
     void refreshChatSessions().catch(() => { /* History can be refreshed separately from committed delivery. */ });
