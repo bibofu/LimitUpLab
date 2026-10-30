@@ -746,7 +746,7 @@ const hotRankingResponse = {
   stock_mentions: [{ name: "样例科技", symbol: "600101", trade_date: "2026-10-15" }],
 };
 
-test("real SSE shows a provisional answer and replaces it with the committed table", async t => {
+test("real SSE finalizes the provisional bubble in place with the committed table", async t => {
   const stream = liveStream();
   const app = mount(t, {
     streamAgentChatMessage: (payload: any, onEvent: any) => transport.streamChat("", payload, onEvent, async () => stream.response),
