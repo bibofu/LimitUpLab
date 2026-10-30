@@ -129,7 +129,10 @@ def _review(state, deps):
         proposal = prepare_memory_request(decision.memory_intent, deps.control, retrieved.owner_revision) \
             if decision.memory_intent else {}
         return {"done": False, "memory_request": proposal,
-                "reference_intent": decision.reference_intent.model_dump(),
+                "reference_intent": (
+                    decision.reference_intent.model_dump()
+                    if decision.reference_intent is not None else {"kind": "none"}
+                ),
                 "memory_owner_revision": retrieved.owner_revision,
                 "memory_context_fingerprint": retrieved.context_fingerprint,
                 "memory_dependencies": list(retrieved.dependencies)}

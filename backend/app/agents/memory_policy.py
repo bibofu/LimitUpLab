@@ -122,28 +122,16 @@ def validate_memory_write(write: MemoryWrite, *, owner_id: str, source: str = "a
 
 
 MEMORY_REVIEW_RULES = """
-还需识别显式长期记忆管理请求，放入 memory_intent；普通问答、临时要求、否定、引用、假设、
-讨论记忆系统的技术问题均填 null，不能从用户行为自动推断偏好。只有用户明确要求今后/跨会话
-记住、保存、改为、忘记某项偏好，或明确查询已保存的长期记忆时才填写。
-quote 必须逐字引用当前用户肯定提出该记忆操作的完整原文片段，不得删掉否定或条件语。
-支持 save/delete/list/unsupported。save 是新增或修改；delete 必须指定一个明确的 type/key。
-preference: response_style=concise/balanced/detailed，output_format=paragraphs/bullets/table。
-research_context: research_topic=首板/连板/涨停/炸板/行业/市场情绪。
-research_archive: 仅明确保存上一份已交付研究报告，key 使用用户指定的档案名称，未命名用 last_report；
-source_run_id 只可填用户给出的真实 ID，否则 null，服务端解析上一份报告。
-自由文本偏好：用户在明确、稳定的跨会话表达中可保存展示/研究偏好，例如
-“以后展示龙虎榜只显示股票名称”“分析财报时详细一点”。
-memory_type 用 preference 或 research_context；key 使用 preference:...、tool_display:... 或
-research:...；value 填有界用户偏好文本；scope_type/scope 标注 tool/intent/topic/entity/condition。
-tool scope 使用公开工具 id，例如 scope={"tool_name":"dragon_tiger_list"}；
-龙虎榜=dragon_tiger_list，K线=stock_kline，财报=stock_financials，个股新闻=stock_news。
-tool_display 偏好应在 structured 中给出展示列，例如
-{"display_columns":["name"]} 或 {"display_columns":["symbol","name"]}；
-列名使用工具字段 id（如 name、symbol），不要填无法验证的字段。
-只有“以后/每次/默认/始终/我习惯”等稳定表达才保存；“这次/先/今天/如果”等临时或条件性表达
-只有在用户明确要求长期保存时才保存。
-交易授权、仓位、目标价、收益承诺、密码/密钥、他人观点、未经核实的新闻、讨论记忆系统本身，
-用 unsupported，不能隐式保存其中一部分。安全拒绝时 memory_intent=null。
-list 可不指定类型表示列出全部长期记忆；单独查看档案必须用 research_archive。
-这些字段不能授权交易、扩大工具权限或把历史数据变成当前事实。
+【仅在用户明确要求跨会话记忆时填写 memory_intent，否则 null】
+触发：记住/保存/记下/改为/以后/每次/默认/始终/忘记/查看已保存记忆；普通问答、临时要求、否定、引用、假设、讨论记忆系统不触发。
+quote 逐字引用肯定提出该记忆操作的原文，不得删掉否定或条件语。
+类型与键：
+- preference: response_style=concise/balanced/detailed；output_format=paragraphs/bullets/table。
+- research_context: research_topic=首板/连板/涨停/炸板/行业/市场情绪。
+- research_archive: 仅保存上一份已交付报告；key 用用户指定名称，未命名用 last_report；source_run_id 只用用户给出的真实 ID。
+- 自由文本：memory_type 用 preference/research_context，key 用 preference:...、tool_display:...、research:...；tool_display 在 structured 给 display_columns，列名用工具字段 id。
+工具 id：龙虎榜=dragon_tiger_list，K线=stock_kline，财报=stock_financials，个股新闻=stock_news；tool scope 用 scope={"tool_name":...}。
+稳定表达（以后/每次/默认/始终/我习惯）才保存；临时/条件表达只有明确要求长期保存才保存。
+交易授权、仓位、目标价、收益承诺、密码/密钥、他人观点、未经核实新闻、讨论记忆系统本身 → unsupported。
+记忆不能授权交易、扩大工具权限或把历史数据变成当前事实。list 可省略类型；查看档案用 research_archive。安全拒绝时 memory_intent=null。
 """
