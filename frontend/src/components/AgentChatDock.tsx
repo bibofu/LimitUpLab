@@ -580,14 +580,19 @@ export function AgentChatDock({
     return true;
   }
 
-  function publishResponse(response: AgentChatResponse, prompt?: string, messageId?: string) {
+  function publishResponse(
+    response: AgentChatResponse, prompt?: string, messageId?: string, options: { reveal?: boolean } = {},
+  ) {
     const completedRun = response.run_id ?? runRef.current?.run_id;
     if (completedRun) settledRuns.current.add(completedRun);
+    // Finalize the same bubble the user watched stream. Removing it and adding a
+    // committed copy would replay the whole answer a second time.
+    const draftId = provisionalMessageRef.current;
     provisionalMessageRef.current = null;
     const id = response.run_id ? `assistant_${response.run_id}` : `agent-${messageId}`;
     setMessages(current => {
       const index = current.findIndex(item => item.role === "agent" &&
-        (item.id === id || Boolean(response.run_id && item.runId === response.run_id)));
+        (item.id === id || item.id === draftId || Boolean(response.run_id && item.runId === response.run_id)));
       const result: ChatMessage = { id, role: "agent", content: response.answer,
         stockMentions: response.stock_mentions, ...responseMessageMetadata(response) };
       return index < 0 ? [...current, result] : current.map((item, position) => position === index ? result : item);
@@ -598,7 +603,9 @@ export function AgentChatDock({
     commandRetry.current = null;
     setCancelRequested(false);
     const canRestart = response.task_status === "error" || response.task_status === "cancelled";
-    setRevealingMessageId(canRestart ? null : id);
+    // Only reveal text the reader has not already seen; a streamed answer must
+    // stay in place when its status and metadata are finalized.
+    setRevealingMessageId(options.reveal !== false && !canRestart ? id : null);
     setFailedPrompt(canRestart ? prompt ?? null : null);
     setError(canRestart ? (response.task_status === "cancelled" ? "任务已取消，可重新提问。" : "本次研究未完成，可重新提问。") : null);
     void refreshChatSessions().catch(() => { /* History can be refreshed separately from committed delivery. */ });
@@ -617,11 +624,13 @@ export function AgentChatDock({
     setSending(true);
     let draftId: string | null = null;
     let stockMentions: AgentStockMention[] = [];
+    let draftShown = false;
     const draftMessageId = () => (runRef.current?.run_id ? `assistant_${runRef.current.run_id}`
       : request?.message_id ? `agent-${request.message_id}` : null);
     const buffer = createAgentAnswerBuffer(content => {
       const id = draftId;
       if (!current() || !id) return;
+      draftShown = content.length > 0;
       if (!content) {
         setMessages(currentMessages => currentMessages.filter(item => item.id !== id));
         return;
@@ -694,8 +703,9 @@ export function AgentChatDock({
         applyRunState(response.run);
         setError(null);
       } else {
-        removeDraft();
-        publishResponse(response, prompt, request?.message_id);
+        // Finalize the streamed bubble in place; only a response that was never
+        // streamed gets the progressive reveal.
+        publishResponse(response, prompt, request?.message_id, { reveal: !draftShown });
       }
     } catch (caught) {
       buffer.dispose();

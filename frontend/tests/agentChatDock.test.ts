@@ -771,8 +771,10 @@ test("real SSE shows a provisional answer and replaces it with the committed tab
   stream.send(7, "completed", hotRankingResponse);
   stream.send(8, "completed", hotRankingResponse);
   await app.settle();
-  assert.equal(app.answers().length, 1);
-  assert.equal(app.answers()[0].props.animate, true);
+  assert.equal(app.answers().length, 1, "the streamed bubble is finalized in place");
+  assert.equal(app.answers()[0].props.animate, false, "visible streamed text is never replayed");
+  assert.equal(app.answers()[0].props.provisional, undefined);
+  assert.equal(app.answers()[0].props.content, hotRankingResponse.answer);
   assert.equal(app.has(node => node.props.className === "chat-task-status" && node.props.children === "研究已完成"), true);
   const html = app.answerHtml();
   assert.equal(html.split("<table>").length - 1, 1);

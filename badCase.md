@@ -7,6 +7,13 @@
 - 修复：新增 `AnswerDelivery`，把模型流按约 120 字符 / 200ms 合并为 `answer_start` / `answer_delta` / `answer_reset` 并持久化到 `react_events`；前端用 revision + offset 的 Unicode 缓冲幂等拼接，以“生成中，待校验”展示候选正文，`completed` 到达后整体替换。工具调用轮次、length 截断、取消、合规信号命中与复核拒绝都会立即撤回；`sanitize_agent_answer` 以重置 revision 处理跨分片的内部标识；重连时服务端重放当前 revision 快照（无 id），前端 `resync` 处理缺口。正式交付仍以 `Journal.finish` 后的 `completed` 为唯一权威。
 - 验证：新增 `test_answer_delivery.py` 7 项与 stream 桥接/快照测试；前端新增 `agentAnswerBuffer.test.ts` 9 项并更新 SSE 测试。真实复验 3 个问题：涨停数量 7.1s、茅台 5 日 K 线 7.4s、今日首板全名单 13.3s（48 个候选片段，无 reset，片段拼接与正式答案逐字一致）；断线重连在 5 个片段后能重放 `answer_start` 和完整当前草稿。后端全量 2154 passed、1 skipped、22 subtests passed；前端 266 passed、构建通过。
 
+## 2026-10-30：候选正文和正式答案被渲染成两次输出
+
+- 原表现：候选正文以“生成中，待校验”显示后，`completed` 到达时前端先删除草稿消息、再追加正式消息，并把正式消息设为渐进展开；用户看到同一答案先完整出现一次，随后又从零逐字展开一次，像是两次输出。
+- 原因：`publishResponse` 用新的 message 对象替换草稿并设置 `revealingMessageId`，没有区分“已经流式展示过的正文”和“从未展示过的历史答案”；删除重建还引入了一次不必要的重挂载。
+- 修复：`publishResponse` 捕获当前 `provisionalMessageRef`，按 `id` / `draftId` / `run_id` 原地合并正式正文、表格、股票链接和 `taskLabel`，保留同一条 assistant 消息；流式展示过的回答不再触发渐进展开，只有历史消息或直接重连到已完成运行才展开。新增断言：完成后仍只有一条消息、`animate=false`、`provisional` 已清除、状态标签原地变为“研究已完成”。
+- 验证：前端 266 passed、构建通过。
+
 ## 2026-10-30：输入安全 prompt 三规则混装，安全拒绝依赖回指解析
 
 - 原表现：`runner/security.py` 的 SYSTEM 无条件追加 `MEMORY_REVIEW_RULES` 和 `REFERENCE_REVIEW_RULES`，共约 3006 字（项目估算约 6012 token），其中安全规则仅 720 字；`SecurityDecision.reference_intent` 必填，拒绝时也先校验回指 quote，明确的安全拒绝可能因无关字段格式错误进入一次 repair，重试后仍失败则返回“输入审核暂时中断”。
