@@ -5,7 +5,7 @@
 - 原表现：`runner/security.py` 的 SYSTEM 无条件追加 `MEMORY_REVIEW_RULES` 和 `REFERENCE_REVIEW_RULES`，共约 3006 字（项目估算约 6012 token），其中安全规则仅 720 字；`SecurityDecision.reference_intent` 必填，拒绝时也先校验回指 quote，明确的安全拒绝可能因无关字段格式错误进入一次 repair，重试后仍失败则返回“输入审核暂时中断”。
 - 修复：拆为 `SECURITY_CORE` + 按线索追加记忆/回指规则；安全核心补信号定义、判定顺序、讨论/执行边界和多信号要求；`reference_intent` 改为可选，拒绝时由 before-validator 清空记忆/回指字段，`_review` 对 None 回退 `kind=none`；压缩记忆/回指规则。
 - 效果：普通问题 3006 → 1156 字（估算 6012 → 1611 token，-73%）；记忆+回指问题 3006 → 2523 字（估算 6012 → 3091 token，-49%）；拒绝不再依赖无关的回指/记忆解析。
-- 验证：新增 `test_input_review_prompt_contract.py` 10 项，覆盖普通问题不带可选段、记忆/回指线索按需追加、prompt 预算、拒绝不依赖 reference_intent、非法记忆/回指字段不阻塞拒绝、普通 allow 不触发 repair、回指 allow 缺 intent 仍走一次 repair；安全/引用/记忆/runner 相关模块合计 127 passed。全量后端回归仍在后台执行，本次提交不声称全量通过。
+- 验证：新增 `test_input_review_prompt_contract.py` 10 项，覆盖普通问题不带可选段、记忆/回指线索按需追加、prompt 预算、拒绝不依赖 reference_intent、非法记忆/回指字段不阻塞拒绝、普通 allow 不触发 repair、回指 allow 缺 intent 仍走一次 repair；安全/引用/记忆/runner 相关模块合计 127 passed；最终代码后端全量 2145 passed、1 skipped、22 subtests passed（254s）。
 
 ## 2026-10-29：总结型复盘复述错误首板/连板数量，且没有本轮工具证据
 
