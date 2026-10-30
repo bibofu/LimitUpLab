@@ -104,6 +104,31 @@ def test_parallel_single_stock_tools_merge_into_one_ordered_set():
     assert singular["status"] == "clarify"
 
 
+def test_explicit_stock_name_resolves_without_asking_for_a_code():
+    refs = build_conversation_referents("run-1", response(
+        "| 代码 | 名称 |\n|---|---|\n| 001219 | 青岛食品 |\n| 002172 | 澳洋健康 |",
+        [activity("001219", "青岛食品"), activity("002172", "澳洋健康")],
+    ))
+    resolved = resolve_reference(
+        "简单介绍一下青岛食品", [], intent={"kind": "entities", "quote": "青岛食品"},
+        referents=refs,
+    )
+    assert resolved["status"] == "resolved"
+    assert resolved["symbols"] == ["001219"] and resolved["verified"] is True
+
+    by_code = resolve_reference(
+        "001219 最近怎么样", [], intent={"kind": "entities", "quote": "001219"},
+        referents=refs,
+    )
+    assert by_code["status"] == "resolved" and by_code["symbols"] == ["001219"]
+
+    unknown = resolve_reference(
+        "介绍一下贵州茅台", [], intent={"kind": "entities", "quote": "贵州茅台"},
+        referents=refs,
+    )
+    assert unknown["status"] == "clarify"
+
+
 def test_analysis_scope_resolves_previous_trading_day_without_a_stock_list():
     refs = build_conversation_referents("run-1", response(
         "2026-10-26 1进2：8/68", [calendar(), promotion(promoted=False)],

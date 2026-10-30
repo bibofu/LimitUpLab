@@ -538,6 +538,42 @@ def _page_conflict(symbols: list[str], page_context: dict | None) -> bool:
     return page_symbol not in symbols if len(symbols) > 1 else symbols != [page_symbol]
 
 
+def _compact_text(value: Any) -> str:
+    return "".join(str(value or "").split())
+
+
+def _named_entity(quote: Any, stocks: list[dict[str, Any]]) -> str | None:
+    """Resolve one explicitly named or coded stock from the prior entity set.
+
+    A message that spells out a stock name is not an ambiguous "which one" set
+    reference, even when the same stock appeared in the previous list.
+    """
+
+    text = _compact_text(quote)
+    if not text:
+        return None
+    exact: list[str] = []
+    contained: list[str] = []
+    for stock in stocks:
+        symbol = _symbol(stock.get("symbol"))
+        if not symbol:
+            continue
+        name = _compact_text(stock.get("name"))
+        if text == symbol or (name and text == name):
+            exact.append(symbol)
+        elif symbol in text:
+            contained.append(symbol)
+        elif name and len(name) >= 4 and name in text:
+            contained.append(symbol)
+    exact = list(dict.fromkeys(exact))
+    if len(exact) == 1:
+        return exact[0]
+    contained = list(dict.fromkeys(contained))
+    if not exact and len(contained) == 1:
+        return contained[0]
+    return None
+
+
 def _resolve_entities_from_referents(reviewed, referents: dict[str, Any],
                                      page_context: dict | None) -> dict[str, Any]:
     stocks = [item for item in referents.get("stocks") or [] if isinstance(item, dict)
@@ -567,6 +603,8 @@ def _resolve_entities_from_referents(reviewed, referents: dict[str, Any],
         if not stock_set.get("ordinal_resolvable") or not ordered or not 1 <= ordinal <= len(ordered):
             return {"status": "clarify", "clarification": "上一轮未能确认展示顺序，请明确股票代码。"}
         selected = [ordered[ordinal - 1]]
+    elif (named := _named_entity(reviewed.quote, stocks)) is not None:
+        selected = [named]
     elif len(symbols) == 1:
         selected = symbols
     else:

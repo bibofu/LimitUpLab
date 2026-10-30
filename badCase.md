@@ -1,5 +1,12 @@
 # Agent 问答回归记录
 
+## 2026-10-30：明确股票名称被当成歧义回指，要求提供代码或序号
+
+- 原表现：`run_fead64a06de74bccaced500da0b7a0a5`（“简单介绍一下青岛食品”）返回 `clarify/reference_ambiguous`，`tool_calls=[]`，回答“请明确所指股票的代码或在上一份名单中的序号。”。同一会话上一轮刚返回 47 只收盘涨停名单，其中包含青岛食品（001219）；checkpoint 中记录 `reference_intent={"kind":"entities","quote":"青岛食品"}`。
+- 原因：输入审查把明确写出的股票名称当成“指向上一轮名单”的实体回指；`ReferenceIntent` 没有命名实体字段，`_resolve_entities_from_referents` 只支持序号、`all_entities` 和代词，遇到多只股票的回指集合就直接澄清。而 `stock_profile` 本身接受六位代码或精确股票名称，完全可以直接查询。
+- 修复：`structured_references._named_entity` 在“多只股票 + 无序号 + 非全量”的歧义分支前，先把 quote 与上一轮 referents 的名称/代码做精确匹配或唯一包含匹配，命中则解析为单只股票；输入审查提示补充“明确写出股票名称或代码时用 none，即使该股在上一轮名单中；entities 只用于序号或代词指代”。
+- 验证：新增 `test_explicit_stock_name_resolves_without_asking_for_a_code`；真实复验同一会话先问“今天哪些股票收盘涨停，全部列出来”，再问“简单介绍一下青岛食品”，第二次调用 `stock_profile`，返回 `complete` 和青岛食品（001219）公司资料。定向 83 passed；后端全量 2155 passed、1 skipped、22 subtests passed。
+
 ## 2026-10-30：首板全名单答案生成 10.8s，期间正文完全不可见
 
 - 原表现：`run_2cd8bc1b8ccc4dd6b3948eb261442c22`（“今天的首板票有哪些，全部列出来”）总耗时 16.6s；Langfuse 中前两轮选工具各约 1.0s，工具返回后最后一轮 `react_decision` 独占 10.83s。该轮 prompt 约 12.9k 估算 token，最终输出 3,590 字符、38 行表格；整轮 completion 合计 2,475 token，几乎全部来自这一步。SSE 只下发 `progress/status`，候选正文不跨边界，因此前端在 10s 内只能看到固定进度文案，用户感知为“卡在 react_decision”。
