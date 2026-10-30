@@ -81,10 +81,10 @@ POST /api/agents/chat/stream
 - 数据缺失：`data_missing`、`source_truncated`、`truncated` 由工具显式返回。
 - 财务口径：`stock_financials` 的 quarterly 主字段是年初至今累计，`*_single_quarter` 是服务端推算的单季值；上一季度缺失时不推算。`report_date` 是来源报告日期，不等同于原始公告日。该工具在 `v1_close_review` 与 `extended` 均开放。
 - 指数数据：`index_search` 负责名称/代码消歧，宽基指数保留 `resolved` 与同名 `variants`；`index_quote` 的 `days` 指最近 N 个有日线的交易日，`data_as_of` 可能早于请求截止日；`index_constituents` 只返回代码和名称，不含权重、行业和市值，不得自行补造。三个指数工具在 `v1_close_review` 与 `extended` 均开放。
-- 合规：关键词仅触发条件语义复核，不直接拒绝否定声明或历史引用；真实违规或复核失败不发布候选回答。可配置 `LIMITUPLAB_AGENT_COMPLIANCE=llm` 对未复核的其余回答也做语义复核。
+- 合规：关键词仅触发条件语义复核，不直接拒绝否定声明或历史引用；真实违规或复核失败不发布正式回答，已展示的候选正文通过 `answer_reset` 撤回。可配置 `LIMITUPLAB_AGENT_COMPLIANCE=llm` 对未复核的其余回答也做语义复核。
 - 输入安全：语义审查提示注入、权限绕过与直接交易指令；正常历史研究允许，拒绝发生在业务工具查询之前，不生成输出合同。
 - 历史复盘：候选 start_date/end_date 与后续观察 as_of_date 分开；聊天工具默认观察到本地最新交易日，显式历史截止仍可复现。报告分别标注候选表现分类、特征分组和实际来源/阶段。
 - 输出完整性：读取模型 finish_reason；length 仅允许一次同证据、禁止新增工具的精简重写，仍失败则明确未完成并返回 partial/error，不能把半句作为 complete。恢复仍受原有轮次和时限预算约束。
 - 运行恢复：LangGraph 原生 checkpoint 是执行状态权威来源，`durability="sync"`；业务 Registry、事件与交付独立。新 durable run 在 worker 丢失后恢复未完成步骤，已保存工具回执跨进程复用；缺失回执明确报告不确定，不承诺 exactly-once。历史 `checkpoint_json` / `react_calls` 不导入原生 checkpoint，旧 run 不能视为已具备原生恢复点。
-- 观测：原生流仅发布安全进度，正式 completed 在 Delivery 提交后发布。Context、Memory、LLM、Tool、Checkpoint、Validation、Delivery 阶段使用关联 trace；导出失败有安全日志并保持业务运行。
+- 观测：原生流发布安全进度和可撤回的候选正文（`answer_start` / `answer_delta` / `answer_reset`），正式 completed 在 Delivery 提交后发布。Context、Memory、LLM、Tool、Checkpoint、Validation、Delivery 阶段使用关联 trace；导出失败有安全日志并保持业务运行。
 - 评测：旧 Golden/quality 框架已退出；已有 40 条短期和 44 条长期固定 Tool World Golden，以及 PostgreSQL 恢复/交付测试、消融和独立评测 CLI。脚本模型通过不代表真实 LLM 任务质量通过，实际问答需另行验收。

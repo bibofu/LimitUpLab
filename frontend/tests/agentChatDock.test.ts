@@ -9,6 +9,7 @@ import { MemoryRouter } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import ts from "typescript";
 import * as interaction from "../src/utils/agentChatInteraction.ts";
+import * as answerBuffer from "../src/utils/agentAnswerBuffer.ts";
 import * as transport from "../src/utils/agentChatTransport.ts";
 import * as jsonRequest from "../src/utils/jsonRequest.ts";
 import * as verifiedReveal from "../src/utils/verifiedAnswerReveal.ts";
@@ -46,10 +47,12 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
   const effects: (() => unknown)[] = [];
   const storage = new Map<string, string>();
   if (savedSessionId) storage.set("limituplab.activeChatSession", savedSessionId);
+  const frames = new Map<number, () => void>();
+  let frameId = 0;
   const globals: Record<string, unknown> = {
     window: { localStorage: { getItem: (key: string) => storage.get(key), setItem: (key: string, value: string) => storage.set(key, value) }, confirm: () => true },
-    requestAnimationFrame: () => 1,
-    cancelAnimationFrame: () => {},
+    requestAnimationFrame: (callback: () => void) => { frames.set(++frameId, callback); return frameId; },
+    cancelAnimationFrame: (handle: number) => { frames.delete(handle); },
   };
   for (const [key, value] of Object.entries(globals)) {
     const original = Object.getOwnPropertyDescriptor(globalThis, key);
@@ -96,6 +99,7 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
   };
   const imports: Record<string, any> = {
     react: hooks, "../api": api, "../utils/agentChatInteraction": interaction,
+    "../utils/agentAnswerBuffer": answerBuffer,
     "../utils/agentChatTransport": transport,
     "../utils/jsonRequest": jsonRequest,
     "./AgentAnswerMarkdown": markdownModule.exports,
@@ -119,8 +123,13 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
     effects.splice(0).forEach(effect => effect());
   }
   render();
+  function paint() {
+    const pending = [...frames.values()];
+    frames.clear();
+    pending.forEach(callback => callback());
+  }
   return {
-    async settle() { await new Promise(resolve => setImmediate(resolve)); render(); },
+    async settle() { await new Promise(resolve => setImmediate(resolve)); paint(); render(); },
     render,
     find(predicate: (node: any) => boolean) {
       const node = nodes.find(predicate);
@@ -737,7 +746,7 @@ const hotRankingResponse = {
   stock_mentions: [{ name: "样例科技", symbol: "600101", trade_date: "2026-10-15" }],
 };
 
-test("real SSE keeps candidate prose private and publishes one complete table with stock links", async t => {
+test("real SSE shows a provisional answer and replaces it with the committed table", async t => {
   const stream = liveStream();
   const app = mount(t, {
     streamAgentChatMessage: (payload: any, onEvent: any) => transport.streamChat("", payload, onEvent, async () => stream.response),
@@ -749,14 +758,16 @@ test("real SSE keeps candidate prose private and publishes one complete table wi
   stream.send(2, "answer_delta", { offset: 0, delta: "未经校验的引言" });
   stream.send(3, "progress", { stage: "checking", message: "正在核对榜单和来源" });
   await app.settle();
-  assert.equal(app.answers().length, 0);
-  assert.equal(app.has(node => node.props.stage === "checking" && node.props.message === "正在核对榜单和来源"), true);
+  assert.equal(app.answers().length, 1);
+  assert.equal(app.answers()[0].props.content, "未经校验的引言");
+  assert.equal(app.has(node => node.props.className === "chat-task-status" && node.props.children === "生成中，待校验"), true);
   assert.equal(app.has(node => node.props.className === "icon-button chat-cancel"), true);
   stream.send(4, "answer_reset", { message: "重新整理" });
   stream.send(5, "answer_start", { revision: 2, provisional: true });
   stream.send(6, "answer_delta", { offset: 0, delta: hotRankingResponse.answer });
   await app.settle();
-  assert.equal(app.answers().length, 0, "even a complete candidate stays private until completed");
+  assert.equal(app.answers().length, 1, "a new revision replaces the withdrawn draft");
+  assert.equal(app.answers()[0].props.content, hotRankingResponse.answer);
   stream.send(7, "completed", hotRankingResponse);
   stream.send(8, "completed", hotRankingResponse);
   await app.settle();
@@ -773,7 +784,7 @@ test("real SSE keeps candidate prose private and publishes one complete table wi
   assert.equal(app.has(node => node.props.stage === "checking"), false);
 });
 
-test("SSE reconnection consumes legacy draft IDs and delivers one final message without replaying drafts", async t => {
+test("SSE reconnection resumes a visible draft and replaces it with one final message", async t => {
   const first = liveStream();
   const second = liveStream();
   const calls: { url: string; method: string }[] = [];
@@ -786,27 +797,32 @@ test("SSE reconnection consumes legacy draft IDs and delivers one final message 
   await app.settle();
   app.type("当前的热门股票有哪些");
   app.submit();
+  first.send(3, "answer_start", { revision: 1, provisional: true });
   first.send(4, "answer_delta", { offset: 0, delta: "断线前的草稿" });
+  await app.settle();
+  assert.equal(app.answers().length, 1);
+  assert.equal(app.answers()[0].props.content, "断线前的草稿");
   first.close();
   await app.settle();
-  assert.equal(app.answers().length, 0);
   assert.deepEqual(calls, [
     { url: "/api/agents/chat/stream", method: "POST" },
     { url: "/api/agents/chat/runs/run-live/stream?after=4", method: "GET" },
   ]);
-  second.send(4, "answer_delta", { offset: 0, delta: "重放草稿" });
+  second.send(4, "answer_delta", { offset: 0, delta: "断线前的草稿" });
   second.send(5, "answer_delta", { offset: 6, delta: "接续草稿" });
   second.send(6, "progress", { stage: "checking", message: "正在核对最终结果" });
   await app.settle();
-  assert.equal(app.answers().length, 0);
+  assert.equal(app.answers().length, 1);
+  assert.equal(app.answers()[0].props.content, "断线前的草稿接续草稿");
   second.send(7, "completed", hotRankingResponse);
   await app.settle();
   assert.equal(app.answers().length, 1);
   assert.equal(app.answers()[0].props.content, hotRankingResponse.answer);
+  assert.equal(app.answers()[0].props.provisional, undefined);
 });
 
 for (const failure of ["server-error", "disconnect", "cancelled"] as const) {
-  test(`real SSE ${failure} leaves no candidate answer visible`, async t => {
+  test(`real SSE ${failure} removes a provisional answer that will not be committed`, async t => {
     const stream = liveStream();
     let calls = 0;
     const app = mount(t, {
@@ -825,7 +841,8 @@ for (const failure of ["server-error", "disconnect", "cancelled"] as const) {
     stream.send(2, "answer_delta", { offset: 0, delta: "不能显示的候选榜单" });
     stream.send(3, "progress", { stage: "tools", message: "正在查询数据" });
     await app.settle();
-    assert.equal(app.answers().length, 0);
+    assert.equal(app.answers().length, 1);
+    assert.equal(app.answers()[0].props.content, "不能显示的候选榜单");
     if (failure === "cancelled") app.find(node => node.props["aria-label"] === "结束任务").onClick();
     else if (failure === "server-error") stream.send(4, "error", { message: "任务中断，请重试恢复" });
     else stream.close();

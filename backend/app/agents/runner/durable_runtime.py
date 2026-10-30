@@ -27,7 +27,7 @@ from app.agents.runner.guardrails import REFUSAL
 from app.agents.runner.guardrails import MAX_TOOL_CALLS
 from app.services.durable_checkpointer import FencedPostgresSaver, psycopg_url
 from app.services.runtime_coordination import LeaseLost
-from app.services.agent_stream import NativeStreamBridge, emit_status, emit_tool_event
+from app.services.agent_stream import NativeStreamBridge, emit_answer_event, emit_status, emit_tool_event
 from app.services.agent_tracing import trace_context, trace_stage
 
 SCHEMA_VERSION = 1
@@ -489,6 +489,7 @@ class DurableRuntime:
                        "remaining_seconds": max(0, runner.deadline - perf_counter())}
         previous_progress = runner.progress
         runner.progress = emit_status
+        runner.enable_answer_delivery(emit_answer_event)
         try:
             # In pinned LangGraph 1.0.5 multiple stream modes yield (mode, data).
             # Updates can precede their sync checkpoint: never deliver from them.

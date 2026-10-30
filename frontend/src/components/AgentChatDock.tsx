@@ -48,6 +48,7 @@ import { AgentAnswerMarkdown } from "./AgentAnswerMarkdown";
 import { AgentChatProgress } from "./AgentChatProgress";
 import { AgentDisplayBlocks } from "./AgentDisplayBlocks";
 import { AnswerFeedback } from "./AnswerFeedback";
+import { createAgentAnswerBuffer } from "../utils/agentAnswerBuffer";
 import { taskStatusLabel } from "../utils/agentChatTransport";
 import { HttpResponseError } from "../utils/jsonRequest";
 import {
@@ -69,6 +70,7 @@ interface ChatMessage {
   suggestedQuestions?: string[];
   taskLabel?: string;
   feedback?: AnswerFeedbackValue | null;
+  provisional?: boolean;
 }
 
 const ACTIVE_CHAT_SESSION_STORAGE_KEY = "limituplab.activeChatSession";
@@ -280,9 +282,16 @@ export function AgentChatDock({
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const followAnswerRef = useRef(true);
+  const answerBufferRef = useRef<ReturnType<typeof createAgentAnswerBuffer> | null>(null);
+  const provisionalMessageRef = useRef<string | null>(null);
   const [showLatest, setShowLatest] = useState(false);
   const isConversationActive = sending || messages.length > 0;
   const activeRunId = activeRun?.run_id;
+
+  useEffect(() => () => {
+    answerBufferRef.current?.dispose();
+    answerBufferRef.current = null;
+  }, []);
 
   useEffect(() => () => {
     subscription.current.generation++;
@@ -540,6 +549,11 @@ export function AgentChatDock({
     subscription.current.generation++;
     subscription.current.controller?.abort();
     subscription.current.controller = null;
+    answerBufferRef.current?.dispose();
+    answerBufferRef.current = null;
+    const draft = provisionalMessageRef.current;
+    provisionalMessageRef.current = null;
+    if (draft) setMessages(current => current.filter(item => item.id !== draft));
     setSending(false);
   }
 
@@ -569,6 +583,7 @@ export function AgentChatDock({
   function publishResponse(response: AgentChatResponse, prompt?: string, messageId?: string) {
     const completedRun = response.run_id ?? runRef.current?.run_id;
     if (completedRun) settledRuns.current.add(completedRun);
+    provisionalMessageRef.current = null;
     const id = response.run_id ? `assistant_${response.run_id}` : `agent-${messageId}`;
     setMessages(current => {
       const index = current.findIndex(item => item.role === "agent" &&
@@ -600,6 +615,28 @@ export function AgentChatDock({
     const current = () => generation === subscription.current.generation && targetSession === selectedSession.current;
     runStartedAt.current = Date.now();
     setSending(true);
+    let draftId: string | null = null;
+    let stockMentions: AgentStockMention[] = [];
+    const draftMessageId = () => (runRef.current?.run_id ? `assistant_${runRef.current.run_id}`
+      : request?.message_id ? `agent-${request.message_id}` : null);
+    const buffer = createAgentAnswerBuffer(content => {
+      const id = draftId;
+      if (!current() || !id) return;
+      if (!content) {
+        setMessages(currentMessages => currentMessages.filter(item => item.id !== id));
+        return;
+      }
+      const draft: ChatMessage = { id, role: "agent", content, stockMentions, provisional: true };
+      setMessages(currentMessages => currentMessages.some(item => item.id === id)
+        ? currentMessages.map(item => item.id === id ? draft : item)
+        : [...currentMessages, draft]);
+    });
+    answerBufferRef.current = buffer;
+    const removeDraft = () => {
+      const id = draftId;
+      provisionalMessageRef.current = null;
+      if (id) setMessages(currentMessages => currentMessages.filter(item => item.id !== id));
+    };
     try {
       const response = await start(event => {
         if (!current()) return;
@@ -615,12 +652,56 @@ export function AgentChatDock({
           setStreamStage(event.data.stage);
           if (!["pausing", "resuming"].includes(runRef.current?.run_status ?? "")) setStreamStatus(event.data.message);
         }
+        if (event.event === "answer_start") {
+          const id = draftMessageId();
+          if (!id) return;
+          draftId = id;
+          provisionalMessageRef.current = id;
+          stockMentions = event.data.stock_mentions ?? [];
+          setStreamStage("answering");
+          setStreamStatus("正在生成回答，完成后以正式答复为准");
+          buffer.start(event.data.revision);
+        }
+        if (event.event === "answer_delta") {
+          if (!draftId) {
+            const id = draftMessageId();
+            if (!id) return;
+            draftId = id;
+            provisionalMessageRef.current = id;
+            setStreamStage("answering");
+            setStreamStatus("正在生成回答，完成后以正式答复为准");
+          }
+          try {
+            buffer.append(event.data.offset, event.data.delta);
+          } catch {
+            // A gap means the local buffer missed a frame. Drop it and let the
+            // transport reconnect; the server replays the current revision.
+            buffer.resync();
+            throw new Error("回答片段不连续，正在重新读取");
+          }
+        }
+        if (event.event === "answer_reset") {
+          buffer.reset();
+          setStreamStage("checking");
+          setStreamStatus(event.data.message);
+        }
       }, { signal: controller.signal, after });
+      buffer.dispose();
+      if (answerBufferRef.current === buffer) answerBufferRef.current = null;
       if (!current()) return;
-      if ("paused" in response) { applyRunState(response.run); setError(null); }
-      else publishResponse(response, prompt, request?.message_id);
+      if ("paused" in response) {
+        removeDraft();
+        applyRunState(response.run);
+        setError(null);
+      } else {
+        removeDraft();
+        publishResponse(response, prompt, request?.message_id);
+      }
     } catch (caught) {
+      buffer.dispose();
+      if (answerBufferRef.current === buffer) answerBufferRef.current = null;
       if (!current() || controller.signal.aborted) return;
+      removeDraft();
       setError(caught instanceof Error ? caught.message : "连接中断，请重新连接原任务");
       const run = runRef.current;
       if (run) {
@@ -642,6 +723,8 @@ export function AgentChatDock({
         failedRequest.current = request;
       }
     } finally {
+      buffer.dispose();
+      if (answerBufferRef.current === buffer) answerBufferRef.current = null;
       if (current()) {
         subscription.current.controller = null;
         setSending(false);
@@ -914,14 +997,14 @@ export function AgentChatDock({
           ) : null}
           {messages.map((item) => (
             <article
-              className={`chat-message chat-${item.role} ${item.status === "error" ? "chat-error" : ""} ${item.role === "agent" && item.runId ? "chat-has-feedback" : ""}`}
+              className={`chat-message chat-${item.role} ${item.status === "error" ? "chat-error" : ""} ${item.provisional ? "chat-provisional" : ""} ${item.role === "agent" && item.runId ? "chat-has-feedback" : ""}`}
               key={item.id}
             >
               {item.role === "agent" ? (
                 <>
                   <div className="chat-markdown">
-                    {item.taskLabel ? <small className="chat-task-status">
-                      {item.taskLabel}
+                    {item.provisional || item.taskLabel ? <small className="chat-task-status">
+                      {item.provisional ? "生成中，待校验" : item.taskLabel}
                     </small> : null}
                     <AgentAnswerMarkdown
                       content={item.content}

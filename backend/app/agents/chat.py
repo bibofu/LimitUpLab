@@ -18,6 +18,7 @@ def answer_first_board_chat(
     answer_delta_callback: Callable[[str], None] | None = None,
     tool_registry: AgentToolRegistry | None = None,
     answer_event_callback: Callable[[str, dict], None] | None = None,
+    answer_revision_base: int = 0,
 ) -> AgentChatResponse:
     """Execute the durable production runner for an owned chat request."""
 
@@ -31,4 +32,5 @@ def answer_first_board_chat(
         llm_provider=llm_provider,
         progress_callback=progress_callback,
         tool_registry=tool_registry,
+        answer_revision_base=answer_revision_base,
     )

@@ -5,7 +5,7 @@ import json
 import threading
 from types import SimpleNamespace
 
-from langchain_core.messages import AIMessage
+from langchain_core.messages import AIMessage, AIMessageChunk
 import pytest
 
 from app.agents.runtime_errors import RecoverableRunError
@@ -18,7 +18,7 @@ from test_runner_production import input_review
 from test_runner_shadow import ScriptedProvider
 
 
-def test_native_custom_and_updates_are_replayed_without_candidate_text(world, monkeypatch):
+def test_native_custom_and_updates_are_replayed_without_raw_state_text(world, monkeypatch):
     request, control, history = world.start()
     provider = ScriptedProvider([input_review(), tool_call(), list_answer()])
     execution, calls = runner(request, provider, history=history)
@@ -51,6 +51,93 @@ def test_native_custom_and_updates_are_replayed_without_candidate_text(world, mo
             assert delivered["answer"] == result.answer
             cursor = events[1]["seq"]
             assert all(event["seq"] > cursor for event in world.lifecycle.events(control.row["run_id"], world.owner, cursor))
+
+    run_async(scenario())
+
+
+def test_candidate_answer_streams_before_delivery_and_withdraws_tool_prose(world):
+    class ChunkedProvider(ScriptedProvider):
+        def __init__(self, steps):
+            self.steps = list(steps)
+            self.calls = []
+            self.options = []
+
+        def generate_messages(self, messages, tools, **kwargs):
+            self.calls.append(messages)
+            self.options.append({"tools": tools, **kwargs})
+            chunks, response = self.steps.pop(0)
+            for text in chunks:
+                if kwargs.get("on_chunk") is not None:
+                    kwargs["on_chunk"](AIMessageChunk(content=text))
+            if isinstance(response, Exception):
+                raise response
+            return response
+
+    request, control, history = world.start()
+    answer = list_answer()
+    provider = ChunkedProvider([
+        ([], input_review()),
+        (["正在", "查询"], tool_call()),
+        (["| 股票代码 |\n|---|\n", "| 000002 |\n| 600001 |\n| 300003 |"], answer),
+    ])
+    execution, calls = runner(request, provider, history=history)
+
+    async def scenario():
+        async with runtime_for(world) as runtime:
+            result = await runtime.run(execution, control)
+        events = world.lifecycle.events(control.row["run_id"], world.owner)
+        kinds = [event["event"] for event in events]
+        assert kinds.count("answer_start") == 2 and "answer_delta" in kinds and "answer_reset" in kinds
+        visible = []
+        for event in events:
+            payload = json.loads(event["payload_json"])
+            if event["event"] in {"answer_start", "answer_reset"}:
+                visible = []
+            elif event["event"] == "answer_delta":
+                assert payload["offset"] == len("".join(visible))
+                visible.append(payload["delta"])
+        assert "".join(visible) == result.answer
+        assert result.answer == answer.content
+        frames = react_chat.stream(world.lifecycle, control.row, world.owner).body_iterator
+        received = [await anext(frames) for _ in range(len(events) + 1)]
+        await frames.aclose()
+        assert any("event: answer_delta" in frame and "000002" in frame for frame in received)
+        assert not any("event: completed" in frame for frame in received)
+        delivered = world.deliver(request, control, result)
+        assert delivered["answer"] == result.answer
+
+    run_async(scenario())
+
+
+def test_reconnect_replays_the_current_answer_revision_without_ids(world):
+    _, control, _ = world.start()
+    run_id = control.row["run_id"]
+    lifecycle = world.lifecycle
+    for event, payload in [
+        ("answer_start", {"revision": 1, "provisional": True}),
+        ("answer_delta", {"offset": 0, "delta": "旧草稿"}),
+        ("answer_reset", {"message": "正在重新整理回答"}),
+        ("answer_start", {"revision": 2, "provisional": True}),
+        ("answer_delta", {"offset": 0, "delta": "新"}),
+        ("answer_delta", {"offset": 1, "delta": "草稿"}),
+    ]:
+        lifecycle.services.events.append(run_id, event, payload, execution=control.execution)
+    assert react_chat.answer_revision_base(lifecycle, run_id, world.owner) == 2
+
+    async def scenario():
+        frames = react_chat.stream(lifecycle, control.row, world.owner, after=99).body_iterator
+        received = [await anext(frames) for _ in range(4)]
+        await frames.aclose()
+        assert "event: accepted" in received[0]
+        text = "\n".join(received[1:])
+        assert "旧草稿" not in text
+        assert "event: answer_start" in text
+        deltas = [
+            json.loads(frame.split("data: ", 1)[1].rsplit("\n\n", 1)[0])["delta"]
+            for frame in received[1:] if "event: answer_delta" in frame
+        ]
+        assert "".join(deltas) == "新草稿"
+        assert all(not frame.startswith("id:") for frame in received[1:])
 
     run_async(scenario())
 

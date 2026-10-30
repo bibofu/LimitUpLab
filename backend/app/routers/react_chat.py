@@ -20,7 +20,7 @@ from app.models import AgentChatResponse, ChatSessionMessage
 from app.repositories import ChatSessionRepository, SessionOwnershipError
 from app.security import current_owner_id
 from app.services.agent_tracing import get_agent_tracer, trace_context, trace_stage
-from app.services.agent_stream import PUBLIC_PROGRESS_EVENTS
+from app.services.agent_stream import PUBLIC_STREAM_EVENTS
 from app.services.agent_run_state import public_run_state
 
 router = APIRouter()
@@ -226,11 +226,24 @@ def start(request, http_request, owner_id):
                     run_id, owner_id, execution=execution, admission=lease,
                 )
                 progress("preparing", "正在准备会话与研究数据")
+                # A resumed attempt must not append onto a draft that a crash or
+                # a pause left visible. Withdraw it and continue in a new revision.
+                revision = answer_revision_base(lifecycle, run_id, owner_id)
+                if revision:
+                    try:
+                        lifecycle.event(run_id, "answer_reset", {
+                            "event_version": 1, "stage": "answering", "run_id": run_id,
+                            "thread_id": request.session_id, "message": "正在重新整理回答",
+                        })
+                        notify_streams()
+                    except Exception:
+                        # Draft cleanup is presentation, not execution state.
+                        logger.info("Unable to publish draft reset for %s", run_id, exc_info=True)
                 with agents.capture_llm_usage() as tracker:
                     response = agents.answer_first_board_chat(
                         request=request, events=agents.get_limit_up_repository().list_events(),
                         repository=agents.FirstBoardRepository(), conversation_messages=history,
-                        progress_callback=progress,
+                        progress_callback=progress, answer_revision_base=revision,
                     )
                 response.run_id = run_id
             except (PausedRunError, RunPauseRequested) as error:
@@ -345,6 +358,35 @@ def failed_response(row, reason):
         answer="本次研究未能完成，请稍后重试。", task_status="error", stop_reason=reason, generated_by=VERSION)
 
 
+def answer_revision_base(lifecycle, run_id, owner_id):
+    """Highest candidate-answer revision already persisted for this run."""
+
+    revisions = []
+    for event in lifecycle.events(run_id, owner_id):
+        if event["event"] != "answer_start":
+            continue
+        try:
+            revisions.append(int(json.loads(event["payload_json"]).get("revision") or 0))
+        except (TypeError, ValueError):
+            continue
+    return max(revisions, default=0)
+
+
+def answer_snapshot(lifecycle, run_id, owner_id):
+    """Replay the current provisional answer revision for a new connection."""
+
+    frames = []
+    for event in lifecycle.events(run_id, owner_id):
+        kind = event["event"]
+        if kind == "answer_start":
+            frames = [event]
+        elif kind == "answer_reset":
+            frames = []
+        elif kind == "answer_delta" and frames:
+            frames.append(event)
+    return frames
+
+
 def interruption_message(row):
     if row.get("runtime_version") == "durable-v1":
         return "运行已中断；原任务和已保存的执行进度已保留，可重试同一请求恢复。"
@@ -358,6 +400,15 @@ def stream(lifecycle, row, owner_id, after=0):
         observed_state = None
         yield "event: accepted\ndata: " + json.dumps({"run_id": run_id, "session_id": row["session_id"],
             "state_revision": row.get("control_revision", 0)}) + "\n\n"
+        if cursor:
+            # A new subscription (page reload or a fresh transport) has no local
+            # draft. Re-send the current revision before the durable cursor so the
+            # reader can rebuild it; replayed frames are idempotent for a reader
+            # that still holds the same buffer.
+            latest = owned(lifecycle, run_id, owner_id)
+            if not latest["response_json"]:
+                for event in answer_snapshot(lifecycle, run_id, owner_id):
+                    yield f"event: {event['event']}\ndata: {event['payload_json']}\n\n"
         while True:
             with _updates:
                 revision = _update_revision
@@ -372,9 +423,9 @@ def stream(lifecycle, row, owner_id, after=0):
                 observed_state = state_key
             for event in lifecycle.events(run_id, owner_id, cursor):
                 cursor = event["seq"]
-                # Old interrupted runs may contain draft events. Advance the
-                # cursor without replaying them; only committed answers are public.
-                if event["event"] in PUBLIC_PROGRESS_EVENTS:
+                # Old runs may contain draft events this protocol no longer uses.
+                # Advance the cursor without replaying unknown kinds.
+                if event["event"] in PUBLIC_STREAM_EVENTS:
                     yield f"id: {cursor}\nevent: {event['event']}\ndata: {event['payload_json']}\n\n"
             if latest["run_status"] == "paused" and not latest["cancelled"]:
                 return

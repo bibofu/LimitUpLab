@@ -75,11 +75,12 @@ async function consumeStream(baseUrl: string, sessionId: string, initialRun: Age
         stateRevision = data.state_revision;
         if (data.run_status === "paused" && !data.cancel_requested) completed = { paused: true, run: data };
       }
-      if (["accepted", "run_state", "progress", "status", "tool_start", "tool_end", "warning", "completed"].includes(name)) {
+      if (["accepted", "run_state", "progress", "status", "tool_start", "tool_end", "warning",
+        "answer_start", "answer_delta", "answer_reset", "completed"].includes(name)) {
         onEvent({ event: name, data, id } as AgentChatStreamEvent);
       }
-      // Old servers/replays may include candidate-answer events. Consume their IDs
-      // without exposing drafts, so read-only reconnection still resumes correctly.
+      // Advance only after the consumer applied a durable event; a failed append
+      // reconnects from the previous cursor and the server replays the draft.
       if (id !== undefined && Number.isSafeInteger(id) && id >= cursor) cursor = id;
     }
     try {

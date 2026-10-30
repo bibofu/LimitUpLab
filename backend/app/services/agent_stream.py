@@ -1,8 +1,9 @@
 """Project native graph events onto a small, replayable public protocol.
 
-Node updates are provisional execution telemetry, never delivery receipts. No
-state, message text, arguments, observations or candidate answer crosses this
-boundary. Only RunDelivery's committed response can produce SSE completed.
+Node updates are provisional execution telemetry, never delivery receipts.
+Candidate answer text travels only through the dedicated answer events and is
+always replaceable; only RunDelivery's committed response can produce SSE
+completed.
 """
 
 import asyncio
@@ -11,6 +12,9 @@ from collections.abc import Mapping
 from langgraph.config import get_stream_writer
 
 PUBLIC_PROGRESS_EVENTS = frozenset({"progress", "status", "tool_start", "tool_end", "warning"})
+ANSWER_EVENTS = frozenset({"answer_start", "answer_delta", "answer_reset"})
+PUBLIC_STREAM_EVENTS = PUBLIC_PROGRESS_EVENTS | ANSWER_EVENTS
+MAX_DELTA_CHARS = 4000
 NODES = frozenset({"input_review", "agent", "tool", "memory"})
 STAGES = {
     "preparing": "正在准备会话与研究数据",
@@ -26,6 +30,14 @@ def emit_status(stage, _message=None):
     """Adapt the runner's fixed progress callback to LangGraph custom output."""
     if stage in STAGES:
         get_stream_writer()({"kind": "status", "stage": stage})
+
+
+def emit_answer_event(kind, payload=None):
+    """Send one candidate-answer event; the committed answer remains separate."""
+
+    if kind not in ANSWER_EVENTS:
+        raise ValueError("Unsupported answer event")
+    get_stream_writer()({"kind": kind, **(payload or {})})
 
 
 def emit_tool_event(kind, call, *, status=None):
@@ -52,6 +64,9 @@ class NativeStreamBridge:
         if not isinstance(raw, Mapping):
             return
         kind, stage = raw.get("kind"), raw.get("stage")
+        if kind in ANSWER_EVENTS:
+            await self._publish_answer(kind, raw)
+            return
         if kind not in PUBLIC_PROGRESS_EVENTS - {"progress"} or stage not in STAGES:
             return
         row = self.control.row
@@ -77,6 +92,33 @@ class NativeStreamBridge:
                 payload["status"] = raw["status"]
         if kind == "warning":
             payload["message"] = "部分查询未能完成，正在检查可用证据"
+        await asyncio.to_thread(self.control.lifecycle.services.events.append,
+            row["run_id"], kind, payload, execution=self.control.execution, admission=self.control.admission)
+        notify = getattr(self.control, "notify", None)
+        if notify:
+            notify()
+
+    async def _publish_answer(self, kind, raw):
+        """Persist one candidate-answer frame with a whitelisted payload."""
+
+        row = self.control.row
+        payload = {"event_version": 1, "stage": "answering", "run_id": row["run_id"],
+                   "thread_id": row["session_id"],
+                   "recovery_count": int(row.get("recovery_count", 0))}
+        if kind == "answer_start":
+            if not isinstance(raw.get("revision"), int):
+                return
+            payload.update(revision=raw["revision"], provisional=True)
+        elif kind == "answer_delta":
+            delta = raw.get("delta")
+            if (not isinstance(raw.get("offset"), int) or raw["offset"] < 0
+                    or not isinstance(delta, str) or not delta or len(delta) > MAX_DELTA_CHARS):
+                return
+            payload.update(offset=raw["offset"], delta=delta)
+        else:
+            payload["message"] = str(raw.get("message") or "正在重新整理回答")[:200]
+            if isinstance(raw.get("revision"), int):
+                payload["revision"] = raw["revision"]
         await asyncio.to_thread(self.control.lifecycle.services.events.append,
             row["run_id"], kind, payload, execution=self.control.execution, admission=self.control.admission)
         notify = getattr(self.control, "notify", None)

@@ -25,6 +25,7 @@ from app.agents.runner.guardrails import (
     requires_compliance_review,
 )
 from app.agents.tool_profiles import ToolProfile, resolve_tool_profile
+from app.agents.runner.answer_delivery import AnswerDelivery
 from app.agents.runner.prompt import build_system_prompt
 from app.agents.runner.result import RunnerResult
 from app.agents.runner.tool_view import business_definitions, dump, model_result
@@ -85,6 +86,7 @@ class AgentRunner:
         review_all_answers: bool = False,
         progress=None,
         tool_profile: ToolProfile | None = None,
+        answer_revision_base: int = 0,
     ):
         self.request = request
         self.history = history or []
@@ -108,6 +110,8 @@ class AgentRunner:
         self.progress = progress
         self.review_all_answers = review_all_answers
         self.cache: dict[str, dict[str, Any]] = {}
+        # Streaming is attached by the durable runtime; direct node tests stay silent.
+        self.delivery = AnswerDelivery(None, revision_base=answer_revision_base)
         # One stable payload per request; the provider resends it every round.
         self.definition_chars = len(json.dumps(
             self.definitions, ensure_ascii=False, separators=(",", ":"),
@@ -118,6 +122,13 @@ class AgentRunner:
         self.reference_date = reference_date
         self.gateway.reference_date = reference_date
         self.system_prompt = build_system_prompt(reference_date)
+
+    def enable_answer_delivery(self, emit) -> None:
+        """Attach the graph's candidate-answer channel to this runner."""
+
+        self.delivery = AnswerDelivery(
+            emit, revision_base=self.delivery.revision,
+        )
 
     def agent(self, state: RunnerState) -> RunnerState:
         """Ask the model to either call tools or produce the final answer."""
@@ -131,10 +142,12 @@ class AgentRunner:
         if self.progress and state.get("model_rounds", 0) == 0:
             self.progress("planning", "正在理解问题并选择查询")
 
-        def on_chunk(_chunk) -> None:
+        def on_chunk(chunk) -> None:
             if _cancelled() or perf_counter() >= self.deadline:
                 raise InterruptedError("Run cancelled or deadline exceeded")
+            self.delivery.feed(_chunk_text(chunk))
 
+        self.delivery.begin_round()
         try:
             repairing = state.get("answer_repair", False)
             self._record_usage_context(state, repairing)
@@ -148,6 +161,7 @@ class AgentRunner:
                 on_chunk=on_chunk,
             )
         except Exception as error:  # noqa: BLE001 - runner boundary reports the failure
+            self.delivery.withdraw("回答生成暂时中断")
             if _cancelled():
                 return self._cancelled_stop()
             if perf_counter() >= self.deadline:
@@ -159,6 +173,8 @@ class AgentRunner:
         tool_calls = getattr(response, "tool_calls", None) or []
         finish_reason = (getattr(response, "response_metadata", None) or {}).get("finish_reason")
         if finish_reason == "length":
+            # The visible draft was cut off; never leave it as if it were an answer.
+            self.delivery.withdraw("回答达到长度上限，正在重新整理")
             if repairing or rounds >= MAX_MODEL_ROUNDS:
                 return {**self._incomplete_stop(state), "model_rounds": rounds}
             if self.progress:
@@ -181,10 +197,15 @@ class AgentRunner:
         if finish_reason == "content_filter" or (repairing and tool_calls):
             return {**self._incomplete_stop(state), "model_rounds": rounds}
         if tool_calls:
+            # A tool-selection round is not the answer; withdraw any prose it emitted.
+            self.delivery.withdraw("正在继续查询数据")
             return {"messages": messages, "pending": tool_calls, "model_rounds": rounds}
         content = response.content.strip() if isinstance(response.content, str) else ""
         if repairing and not content:
             return {**self._incomplete_stop(state), "model_rounds": rounds}
+        # Publish the candidate before a possible compliance review so the reader
+        # sees the answer arrive; the committed response still replaces it.
+        self.delivery.finish()
         answer, refused, reviewed = content, False, False
         if content and (self.review_all_answers or requires_compliance_review(content)):
             if _cancelled():
@@ -217,6 +238,7 @@ class AgentRunner:
                 return self._compliance_stop(rounds, "ReviewDeadlineExceeded")
             reviewed = True
             if review.decision == "reject":
+                self.delivery.withdraw("回答未通过合规核验")
                 answer, refused = REFUSAL, True
         return {
             "messages": messages,
@@ -331,6 +353,7 @@ class AgentRunner:
             }
 
     def _cancelled_stop(self) -> RunnerState:
+        self.delivery.withdraw("任务已取消")
         return {
             "answer": "任务已取消，未继续执行新的数据查询。",
             "status": "cancelled",
@@ -339,6 +362,7 @@ class AgentRunner:
         }
 
     def _budget_stop(self, state: RunnerState) -> RunnerState:
+        self.delivery.withdraw("查询预算已用完")
         if state.get("answer_repair"):
             return self._incomplete_stop(state)
         summaries = [
@@ -364,6 +388,7 @@ class AgentRunner:
     def _incomplete_stop(self, state: RunnerState) -> RunnerState:
         """Publish only evidence summaries when a complete answer is unavailable."""
 
+        self.delivery.withdraw("回答未完整生成")
         summaries = [item["summary"] for item in state.get("tool_messages", []) if item.get("summary")]
         answer = "回答未完整生成，本次未能完成全部问题。"
         if summaries:
@@ -380,6 +405,7 @@ class AgentRunner:
         }
 
     def _compliance_stop(self, rounds: int, error: str) -> RunnerState:
+        self.delivery.withdraw("回答合规检查未完成")
         return {
             "answer": "回答合规检查未完成，本次结果未发布。",
             "status": "error", "stop_reason": "compliance_error",
@@ -398,6 +424,22 @@ class AgentRunner:
             from app.agents.runtime_errors import RecoverableRunError
             raise RecoverableRunError("持久化运行时暂不可用，请恢复原任务。")
         return runtime.run_sync(self, control)
+
+
+def _chunk_text(chunk: Any) -> str:
+    """Return visible text from one native model chunk, never tool-call JSON."""
+
+    content = getattr(chunk, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(
+            block if isinstance(block, str)
+            else str(block.get("text", "")) if isinstance(block, dict) and block.get("type") == "text"
+            else ""
+            for block in content
+        )
+    return ""
 
 
 def _message_chars(message: Any) -> int:

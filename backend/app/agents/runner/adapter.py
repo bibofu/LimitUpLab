@@ -76,6 +76,7 @@ def answer_with_runner(
     llm_provider: Any | None = None,
     progress_callback: Callable[[str, str], None] | None = None,
     tool_registry: AgentToolRegistry | None = None,
+    answer_revision_base: int = 0,
 ) -> AgentChatResponse:
     """Map the single durable graph's result to the public response contract."""
 
@@ -97,6 +98,7 @@ def answer_with_runner(
         conversation_messages,
         progress=progress_callback,
         review_all_answers=compliance_mode != "deterministic",
+        answer_revision_base=answer_revision_base,
     ).run()
 
     traces = _traces(result)

@@ -683,6 +683,24 @@ export type AgentChatStreamEvent = (
       };
     }
   | {
+      event: "answer_start";
+      data: {
+        revision: number;
+        provisional?: boolean;
+        run_id?: string;
+        thread_id?: string;
+        stock_mentions?: AgentStockMention[];
+      };
+    }
+  | {
+      event: "answer_delta";
+      data: { offset: number; delta: string; run_id?: string; thread_id?: string };
+    }
+  | {
+      event: "answer_reset";
+      data: { message: string; revision?: number; run_id?: string; thread_id?: string };
+    }
+  | {
       event: "completed";
       data: AgentChatResponse;
     }

@@ -764,6 +764,10 @@ td span {
   font-weight: 600;
 }
 
+.chat-message.chat-provisional .chat-markdown {
+  opacity: 0.88;
+}
+
 .chat-reveal-all {
   margin-top: 8px;
   padding: 3px 0;
