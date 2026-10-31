@@ -26,6 +26,9 @@ MAINTENANCE = REPO / ".maintenance"
 WORKER_SERVICES = ("recommendation-refresh", "memory-extraction", "memory-embeddings", "review-worker")
 LEGACY_WORKER_SERVICES = ("quality-worker", "quality-judge-worker")
 SERVICES = ("backend", "frontend", *WORKER_SERVICES, *LEGACY_WORKER_SERVICES, "daily-update")
+WORKER_START_TIMEOUT = 480
+WORKER_STABLE_SECONDS = 30
+WORKER_POLL_SECONDS = 5
 
 
 def database_mode() -> str:
@@ -330,23 +333,138 @@ class Deployment:
         for service in ("backend", "frontend"):
             self.run("docker", "tag", release[service], f"limituplab-{service}:local")
 
-    # Start the release's background workers after the foreground service transition.
+    def worker_leases(self, workers: tuple[str, ...]) -> dict:
+        """Read legacy lease evidence without exposing ownership tokens or changing leases."""
+        names = tuple("job:" + name for name in workers)
+        code = (
+            "import hashlib,json\nfrom app.database import connect_readonly\n"
+            f"names={names!r}\ndb=connect_readonly()\n"
+            "now=float(db.execute('SELECT EXTRACT(EPOCH FROM clock_timestamp())').fetchone()[0])\n"
+            "rows=db.execute('SELECT name,owner_token,fence,expires_at FROM runtime_leases WHERE name IN ('"
+            "+','.join('?' for _ in names)+')',names).fetchall()\ndb.close()\n"
+            "print(json.dumps({row['name'][4:]:{'owner':hashlib.sha256(row['owner_token'].encode()).hexdigest(),"
+            "'fence':row['fence'],'expires_at':row['expires_at'],'live':row['expires_at']>now} for row in rows}))"
+        )
+        return json.loads(self.run("docker", "exec", "limituplab-backend-1", "python", "-c", code,
+                                   capture=True, timeout=15))
+
+    def worker_state(self, service: str) -> dict:
+        """Inspect only lifecycle fields; never export container environment variables."""
+        return json.loads(self.run(
+            "docker", "inspect", f"limituplab-{service}-1", "--format",
+            '{"id":{{json .Id}},"restarts":{{json .RestartCount}},"state":{{json .State}}}',
+            capture=True, timeout=15,
+        ))
+
+    def worker_ready(self, container: str, service: str, started_at: str) -> dict:
+        return json.loads(self.run(
+            "docker", "exec", container, "python", "-m", "app.services.worker_lifecycle",
+            "probe", service, started_at, capture=True, timeout=15,
+        ))
+
+    # Require continuous process stability and lease evidence, including during legacy rollback.
     def start_workers(self, release: dict) -> None:
         declared = self.worker_services(release)
         workers = tuple(name for name in declared
                         if "running_workers" not in release or name in release["running_workers"])
         if not workers:
             return
+        modern = (Path(release["path"]) / "backend/app/services/worker_lifecycle.py").is_file()
+        deadline = time.monotonic() + WORKER_START_TIMEOUT
+        baseline = {}
+        if not modern:
+            while True:
+                try:
+                    baseline = self.worker_leases(workers)
+                    break
+                except (RuntimeError, subprocess.TimeoutExpired, ValueError) as error:
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("Legacy worker lease baseline could not be read") from error
+                    time.sleep(min(WORKER_POLL_SECONDS, max(0, deadline - time.monotonic())))
         self.compose(release, "up", "-d", "--no-build", *workers)
-        # Check they remain alive, rather than only checking a successful docker start.
-        time.sleep(10)
-        for service in workers:
-            state = json.loads(self.run(
-                "docker", "inspect", f"limituplab-{service}-1",
-                "--format", "{{json .State}}", capture=True,
-            ))
-            if not state["Running"] or state["Restarting"]:
-                raise RuntimeError(f"{service} worker is not stable")
+        observed: dict[str, dict] = {}
+        reasons = dict.fromkeys(workers, "not observed")
+        while time.monotonic() < deadline:
+            try:
+                leases = self.worker_leases(workers) if not modern else {}
+            except (RuntimeError, subprocess.TimeoutExpired, ValueError) as error:
+                observed.clear()
+                reasons = dict.fromkeys(workers, f"legacy lease probe failed ({type(error).__name__})")
+                time.sleep(min(WORKER_POLL_SECONDS, max(0, deadline - time.monotonic())))
+                continue
+            complete = True
+            for service in workers:
+                try:
+                    snapshot = self.worker_state(service)
+                    state = snapshot["state"]
+                    identity = (snapshot["id"], state["StartedAt"], snapshot["restarts"])
+                    if (not state["Running"] or state["Restarting"]
+                            or state.get("Paused") or state.get("Dead")
+                            or state.get("Health", {}).get("Status", "healthy") != "healthy"):
+                        observed.pop(service, None)
+                        reasons[service] = (f"container is not running continuously "
+                                            f"(status={state.get('Status')}, restarts={snapshot['restarts']})")
+                        complete = False
+                        continue
+                    current = observed.get(service)
+                    if current is None or current["identity"] != identity:
+                        current = observed[service] = {"identity": identity, "stable_since": None}
+                    ready = False
+                    if modern:
+                        result = self.worker_ready(snapshot["id"], service, state["StartedAt"])
+                        ready = result.get("ready") is True
+                        reason = result.get("reason", "readiness not confirmed")
+                    else:
+                        lease = leases.get(service, {})
+                        old = baseline.get(service, {})
+                        owner = (lease.get("owner"), lease.get("fence"))
+                        if (not lease.get("live") or owner == (old.get("owner"), old.get("fence"))):
+                            current.pop("lease", None)
+                            reason = "legacy lease has not changed owner since startup"
+                        elif current.get("lease", {}).get("owner") != owner:
+                            current["lease"] = {"owner": owner, "expires_at": lease["expires_at"]}
+                            reason = "legacy new owner has not renewed its lease"
+                        else:
+                            ready = lease["expires_at"] > current["lease"]["expires_at"]
+                            reason = "legacy lease renewal confirmed" if ready else "legacy lease renewal pending"
+                    now = time.monotonic()
+                    if ready:
+                        if current["stable_since"] is None:
+                            current["stable_since"] = now
+                        stable = now - current["stable_since"]
+                        reasons[service] = f"{reason}; stable for {stable:.0f}s"
+                        complete = complete and stable >= WORKER_STABLE_SECONDS
+                    else:
+                        current["stable_since"] = None
+                        reasons[service] = reason
+                        complete = False
+                except (RuntimeError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError) as error:
+                    observed.pop(service, None)
+                    reasons[service] = f"worker probe failed ({type(error).__name__})"
+                    complete = False
+            if complete:
+                # A readiness subprocess can overlap a restart; recheck every sampled identity.
+                for service in workers:
+                    try:
+                        snapshot = self.worker_state(service)
+                        state = snapshot["state"]
+                        identity = (snapshot["id"], state["StartedAt"], snapshot["restarts"])
+                        if (identity != observed[service]["identity"] or not state["Running"]
+                                or state["Restarting"] or state.get("Paused") or state.get("Dead")
+                                or state.get("Health", {}).get("Status", "healthy") != "healthy"):
+                            raise RuntimeError("container changed during readiness probe")
+                    except (RuntimeError, subprocess.TimeoutExpired, ValueError, KeyError, TypeError):
+                        observed.pop(service, None)
+                        reasons[service] = "container changed or could not be verified after readiness probe"
+                        complete = False
+            if complete and time.monotonic() < deadline:
+                with self.log.open("a", encoding="utf-8") as output:
+                    output.write(json.dumps({"worker_readiness": reasons,
+                                             "mode": "ownership_probe" if modern else "legacy_renewal"}) + "\n")
+                return
+            time.sleep(min(WORKER_POLL_SECONDS, max(0, deadline - time.monotonic())))
+        details = "; ".join(f"{name}: {reason}" for name, reason in reasons.items())
+        raise RuntimeError(f"Workers did not become ready within {WORKER_START_TIMEOUT}s: {details}")
 
     # Attempt release recovery using the recorded previous state, retaining maintenance protection
     # when rollback is unsafe.

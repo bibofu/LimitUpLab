@@ -253,36 +253,167 @@ def test_extension_bootstrap_precedes_application_migrations_without_app_superus
     assert "postgresql+psycopg://limituplab:REPLACE_WITH_APP_PASSWORD@" in example
 
 
-def test_release_starts_and_inspects_every_background_worker(postgres_release, monkeypatch):
+@pytest.fixture
+def worker_release(postgres_release, monkeypatch):
     item = postgres_release
+    helper = Path(item.previous["path"]) / "backend/app/services/worker_lifecycle.py"
+    helper.parent.mkdir(parents=True)
+    helper.touch()
+    clock = SimpleNamespace(now=0.0)
+    monkeypatch.setattr(release.time, "monotonic", lambda: clock.now)
+    monkeypatch.setattr(release.time, "sleep", lambda seconds: setattr(clock, "now", clock.now + seconds))
     item.compose = Mock()
-    item.run = Mock(return_value=json.dumps({"Running": True, "Restarting": False}))
-    monkeypatch.setattr(release.time, "sleep", lambda _: None)
+    item.worker_state = Mock(side_effect=lambda service: {
+        "id": service, "restarts": 0,
+        "state": {"StartedAt": "2026-10-31T07:00:00Z", "Running": True, "Restarting": False},
+    })
+    item.worker_ready = Mock(return_value={"ready": True, "reason": "lease_owned"})
+    item.worker_leases = Mock(return_value={})
+    return item, clock
+
+
+def test_release_starts_and_continuously_inspects_every_background_worker(worker_release):
+    item, clock = worker_release
     item.start_workers(item.previous)
     item.compose.assert_called_once_with(
         item.previous, "up", "-d", "--no-build",
         "recommendation-refresh", "memory-extraction", "memory-embeddings",
         "review-worker",
     )
-    inspected = [call.args[2] for call in item.run.call_args_list]
-    assert inspected == [
-        "limituplab-recommendation-refresh-1",
-        "limituplab-memory-extraction-1",
-        "limituplab-memory-embeddings-1",
-        "limituplab-review-worker-1",
-    ]
+    assert clock.now == 30
+    assert {call.args[0] for call in item.worker_state.call_args_list} == set(release.WORKER_SERVICES)
+    assert item.worker_state.call_count == 8 * len(release.WORKER_SERVICES)
+    item.worker_leases.assert_not_called()
+    report = json.loads(item.log.read_text().splitlines()[-1])
+    assert report["mode"] == "ownership_probe"
+    assert "stable for 30s" in report["worker_readiness"]["review-worker"]
 
 
-def test_release_rejects_an_unstable_background_worker(postgres_release, monkeypatch):
-    item = postgres_release
-    item.compose = Mock()
-    item.run = Mock(side_effect=[
-        json.dumps({"Running": True, "Restarting": False}),
-        json.dumps({"Running": False, "Restarting": True}),
-    ])
-    monkeypatch.setattr(release.time, "sleep", lambda _: None)
-    with pytest.raises(RuntimeError, match="memory-extraction worker is not stable"):
+@pytest.mark.parametrize("changed", ["id", "restarts", "StartedAt"])
+def test_release_never_accepts_repeated_short_lived_running_processes(worker_release, changed):
+    item, clock = worker_release
+    original = item.worker_state.side_effect
+    def restarting(service):
+        snapshot = original(service)
+        target = snapshot["state"] if changed == "StartedAt" else snapshot
+        target[changed] = str(clock.now)
+        return snapshot
+    item.worker_state.side_effect = restarting
+    with pytest.raises(RuntimeError, match="did not become ready within 480s"):
         item.start_workers(item.previous)
+    assert clock.now == 480
+
+
+@pytest.mark.parametrize("flag", ["Restarting", "Paused", "Dead"])
+def test_release_does_not_treat_unavailable_container_as_ready(worker_release, flag):
+    item, _ = worker_release
+    original = item.worker_state.side_effect
+    def unavailable(service):
+        snapshot = original(service)
+        snapshot["state"][flag] = True
+        return snapshot
+    item.worker_state.side_effect = unavailable
+    with pytest.raises(RuntimeError, match="container is not running continuously"):
+        item.start_workers(item.previous)
+    item.worker_ready.assert_not_called()
+
+
+def test_release_waits_for_lease_ownership_then_full_stability_window(worker_release):
+    item, clock = worker_release
+    item.worker_ready.side_effect = lambda *_: {"ready": clock.now >= 300, "reason": "waiting_for_lease"}
+    item.start_workers(item.previous)
+    assert clock.now == 330
+
+
+def test_release_probe_failure_resets_stability_without_legacy_downgrade(worker_release):
+    item, clock = worker_release
+    def readiness(*_):
+        if clock.now == 10:
+            raise RuntimeError("transient database failure")
+        return {"ready": True, "reason": "lease_owned"}
+    item.worker_ready.side_effect = readiness
+    item.start_workers(item.previous)
+    assert clock.now == 45
+    item.worker_leases.assert_not_called()
+
+
+def test_release_rechecks_identity_after_probe_overlaps_a_restart(worker_release):
+    item, clock = worker_release
+    original = item.worker_state.side_effect
+    restarted = False
+    def snapshot(service):
+        value = original(service)
+        value["restarts"] = int(restarted)
+        return value
+    def readiness(_container, service, _started_at):
+        nonlocal restarted
+        if clock.now == 30 and service == "review-worker":
+            restarted = True
+        return {"ready": True, "reason": "lease_owned"}
+    item.worker_state.side_effect = snapshot
+    item.worker_ready.side_effect = readiness
+    item.start_workers(item.previous)
+    assert clock.now == 65
+
+
+def test_release_honors_existing_docker_healthcheck(worker_release):
+    item, clock = worker_release
+    original = item.worker_state.side_effect
+    def snapshot(service):
+        value = original(service)
+        value["state"]["Health"] = {"Status": "starting" if clock.now < 20 else "healthy"}
+        return value
+    item.worker_state.side_effect = snapshot
+    item.start_workers(item.previous)
+    assert clock.now == 50
+
+
+def test_release_times_out_with_readiness_reason(worker_release):
+    item, _ = worker_release
+    item.worker_ready.return_value = {"ready": False, "reason": "lease_owner_mismatch"}
+    with pytest.raises(RuntimeError, match="review-worker: lease_owner_mismatch"):
+        item.start_workers(item.previous)
+
+
+def legacy_workers(item):
+    (Path(item.previous["path"]) / "backend/app/services/worker_lifecycle.py").unlink()
+    return lambda owner, fence, expiry: {
+        name: {"owner": owner, "fence": fence, "expires_at": expiry, "live": True}
+        for name in release.WORKER_SERVICES
+    }
+
+
+def test_legacy_rollback_waits_out_old_lease_and_verifies_new_owner_renewal(worker_release):
+    item, clock = worker_release
+    leases = legacy_workers(item)
+    item.worker_leases.side_effect = lambda _: (
+        leases("old", 1, 300) if clock.now < 300
+        else leases("new", 2, 600 if clock.now < 400 else 700)
+    )
+    item.start_workers(item.previous)
+    assert clock.now == 430
+    item.worker_ready.assert_not_called()
+
+
+@pytest.mark.parametrize("new_owner", [False, True])
+def test_legacy_rejects_old_owner_renewal_and_new_owner_without_renewal(worker_release, new_owner):
+    item, clock = worker_release
+    leases = legacy_workers(item)
+    item.worker_leases.side_effect = lambda _: (
+        leases("new", 2, 900) if new_owner and clock.now > 0
+        else leases("old", 1, 300 + clock.now)
+    )
+    with pytest.raises(RuntimeError, match="legacy"):
+        item.start_workers(item.previous)
+
+
+def test_legacy_baseline_failure_cannot_start_workers(worker_release):
+    item, _ = worker_release
+    legacy_workers(item)
+    item.worker_leases.side_effect = RuntimeError("database unavailable")
+    with pytest.raises(RuntimeError, match="baseline could not be read"):
+        item.start_workers(item.previous)
+    item.compose.assert_not_called()
 
 
 def test_removed_sqlite_deployment_mode_is_rejected(tmp_path):
@@ -464,22 +595,19 @@ def test_old_release_override_never_invents_memory_workers(postgres_release):
     assert services["quality-judge-worker"]["image"] == "old-back"
 
 
-def test_rollback_restarts_only_previously_running_declared_workers(postgres_release, monkeypatch):
-    item = postgres_release
+def test_rollback_restarts_only_previously_running_declared_workers(worker_release):
+    item, _ = worker_release
     item.declared_services.return_value = (
         "backend", "frontend", "postgres", "postgres-migrate",
         "recommendation-refresh", *release.LEGACY_WORKER_SERVICES,
     )
     item.previous["running_workers"] = ["recommendation-refresh", "quality-worker"]
-    item.compose = Mock()
-    item.run = Mock(return_value=json.dumps({"Running": True, "Restarting": False}))
-    monkeypatch.setattr(release.time, "sleep", lambda _: None)
     item.start_workers(item.previous)
     item.compose.assert_called_once_with(item.previous, "up", "-d", "--no-build",
                                          "recommendation-refresh", "quality-worker")
-    assert [call.args[2] for call in item.run.call_args_list] == [
-        "limituplab-recommendation-refresh-1", "limituplab-quality-worker-1",
-    ]
+    assert {call.args[0] for call in item.worker_state.call_args_list} == {
+        "recommendation-refresh", "quality-worker",
+    }
 
 
 def test_rollback_with_no_running_workers_does_not_start_all_services(postgres_release):
