@@ -5,7 +5,7 @@ from __future__ import annotations
 import re
 
 from app.agents.session_history import is_session_recap_query
-from app.agents.skills import REVIEW_SKILL_TERMS
+from app.agents.skills import DEFAULT_SKILL, matches_skill
 
 
 # Queries that clearly need a specific current-run tool. This is deliberately
@@ -15,7 +15,6 @@ _REQUIRED_TOOL_TERMS = (
     ("market_event_pool", (
         "开板率", "炸板未回封率", "未回封率", "触板股",
     )),
-    ("market_event_pool", REVIEW_SKILL_TERMS),
     ("stock_kline", (
         "k线", "K线", "收盘价", "成交量", "均线", "量比", "回撤",
         "价格与成交量",
@@ -61,6 +60,8 @@ def required_tool_for_query(query: str) -> str | None:
     for tool, terms in _REQUIRED_TOOL_TERMS:
         if any(term.casefold() in text for term in terms):
             return tool
+    if matches_skill(DEFAULT_SKILL, text):
+        return "market_event_pool"
     return None
 
 

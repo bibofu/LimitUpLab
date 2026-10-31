@@ -275,7 +275,7 @@ flowchart LR
 
 ### 每日复盘 skill
 
-`app/agents/skills/daily_review.py` 提供产品内的稳定 playbook；`AgentRunner` 按用户原话命中“复盘/收盘总结/今天市场/市场情绪”等词时追加到 system prompt。skill 不提供数据，只规定编排：
+`app/agents/skills/daily-review/SKILL.md` 提供产品内的稳定 playbook，采用标准目录 + YAML frontmatter（`name`、`description`、`metadata.triggers`）+ Markdown 正文；`AgentRunner` 按用户原话命中触发词时追加正文到 system prompt。skill 不提供数据，只规定编排：
 
 - 先调用 `market_event_pool(event_type=limit_up, result_mode=summary)` 取当日聚合；
 - 用户未指定重点时给紧凑默认复盘（情绪、首板/连板、晋级、数据缺口）；

@@ -127,7 +127,8 @@ tools; every invocation is checked by `ToolGateway`.
 - `market_event_pool(event_type="limit_up", result_mode="summary")` returns the
   canonical market-day aggregate: touched/closed/opened/unsealed counts and
   rates, first/continued counts, max board height and top limit-up industries.
-  The product-internal `daily-review` skill (`app/agents/skills/daily_review.py`)
+  The product-internal `daily-review` skill (`app/agents/skills/daily-review/SKILL.md`,
+  standard folder + YAML frontmatter)
   starts from this aggregate and adds only the focus modules the user asked for.
 - `python -m scripts.sync_sector_data --date YYYY-MM-DD` refreshes the sector
   catalog and daily ranking; the after-close loop runs it automatically.

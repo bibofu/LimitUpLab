@@ -1,9 +1,21 @@
-"""Stable product-internal playbooks selected by request intent."""
+"""Standard SKILL.md folders for product-internal Agent playbooks."""
 
-from app.agents.skills.daily_review import (
-    DAILY_REVIEW_SKILL,
-    REVIEW_SKILL_TERMS,
+from app.agents.skills.loader import (
+    DEFAULT_SKILL,
+    Skill,
+    available_skills,
+    clear_skill_cache,
+    load_skill,
+    matches_skill,
     resolve_agent_skill,
 )
 
-__all__ = ["DAILY_REVIEW_SKILL", "REVIEW_SKILL_TERMS", "resolve_agent_skill"]
+__all__ = [
+    "DEFAULT_SKILL",
+    "Skill",
+    "available_skills",
+    "clear_skill_cache",
+    "load_skill",
+    "matches_skill",
+    "resolve_agent_skill",
+]

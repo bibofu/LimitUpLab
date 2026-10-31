@@ -99,7 +99,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 | `stock_activity` | 汇总指定股票的收盘走势、近期涨停记录、评分补充事实和个股资讯 |
 | `review_high_score_picks` | 追踪每日评分 Top10 后续走势，并对比同期全部首板的1进2成功率 |
 
-复盘问题由内置 `daily-review` skill 编排：先取 `market_event_pool` 的当日聚合，再按用户关注点加载首板/晋级、板块、龙虎榜、指数或评分工具；默认给紧凑摘要，不套固定模板，也不输出交易指令。
+复盘问题由内置 `daily-review` skill（标准 `SKILL.md` 目录，`app/agents/skills/daily-review/SKILL.md`）编排：先取 `market_event_pool` 的当日聚合，再按用户关注点加载首板/晋级、板块、龙虎榜、指数或评分工具；默认给紧凑摘要，不套固定模板，也不输出交易指令。
 
 生产环境依赖上一步名单的查询由模型在观察结果后发起下一轮工具调用；筛选、排序和聚合直接基于工具返回的结构化 rows 与字段说明，模型不再维护 evidence ID 或表达式 DSL。
 
