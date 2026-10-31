@@ -290,6 +290,31 @@ def test_auto_learn_off_does_not_enqueue_or_process(postgresql_database, monkeyp
     assert LongTermMemoryRepository().list_candidates(owner) == []
 
 
+def test_shutdown_finishes_current_memory_job_without_claiming_next(postgresql_database, monkeypatch):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "candidate")
+    job_ids = [seed_job()[3] for _ in range(2)]
+    worker = MemoryExtractionWorker(provider=CandidateProvider([draft()]))
+    processed = []
+    process_job = worker._process
+
+    def finish_then_stop(job):
+        process_job(job)
+        processed.append(job["job_id"])
+
+    monkeypatch.setattr(worker, "_process", finish_then_stop)
+    assert worker.run_once(limit=10, should_stop=lambda: bool(processed)) == 1
+    with closing(connect()) as db:
+        rows = db.execute("SELECT job_id,status,locked_by FROM memory_extraction_jobs").fetchall()
+    assert {row["job_id"] for row in rows} == set(job_ids)
+    for row in rows:
+        if row["job_id"] == processed[0]:
+            assert row["status"] == "succeeded"
+        else:
+            assert row["status"] == "pending"
+            assert row["locked_by"] is None
+    assert worker.run_once(limit=10) == 1
+
+
 def test_candidate_api_lists_confirms_and_rejects(postgresql_database):
     owner = "visitor_" + "c" * 32
     repository = LongTermMemoryRepository()

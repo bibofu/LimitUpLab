@@ -26,6 +26,7 @@ from app.services.recommendation_intelligence import (
     should_finalize_recommendation_intelligence,
 )
 from app.models import RecommendationIntelligenceResponse
+from app.services.worker_lifecycle import WorkerLifecycle
 
 
 DEFAULT_LOCK_PATH = BACKEND_ROOT / "data" / "recommendation_refresh.lock"
@@ -78,35 +79,38 @@ def main() -> int:
     args = parser.parse_args()
     interval = max(5, min(args.interval_minutes, 1440))
 
+    with WorkerLifecycle("recommendation-refresh") as lifecycle:
+        with RefreshLoopLock(args.lock_path, stale_after=WORKER_STALE_AFTER) as lock:
+            lifecycle.ready(lock._shared.lease)
+            return _run_loop(args, interval, lock, lifecycle)
+
+
+def _run_loop(args, interval, lock, lifecycle) -> int:
     if args.once:
-        with RefreshLoopLock(args.lock_path, stale_after=WORKER_STALE_AFTER):
+        if not lifecycle.stop_requested:
             _run_refresh(interval, args.report_path)
         return 0
 
-    with RefreshLoopLock(args.lock_path, stale_after=WORKER_STALE_AFTER) as lock:
-        # Reconcile persisted state on every start. The refresh service enforces
-        # the target day's cutoff before collecting new evidence.
-        next_wait = 0.0
-        recovery_rounds = 0
-        while True:
-            if next_wait:
-                time.sleep(next_wait)
-            result = _run_refresh_with_retries(interval, args.report_path)
-            if isinstance(result, Exception):
-                _write_report(
-                    args.report_path,
-                    {
-                        "status": "error",
-                        "refreshed_at": datetime.now(timezone.utc).isoformat(),
-                        "error": str(result),
-                    },
-                )
-                print(f"Recommendation refresh failed: {result}", flush=True)
-            lock.touch()
-            recovery_rounds = recovery_rounds + 1 if _needs_recovery(result) else 0
-            next_wait = _next_refresh_wait(result, recovery_rounds)
-            if recovery_rounds > MAX_RECOVERY_ROUNDS:
-                recovery_rounds = 0
+    # Reconcile persisted state before the first scheduled wait.
+    next_wait = 0.0
+    recovery_rounds = 0
+    while not lifecycle.stop_requested:
+        if next_wait and lifecycle.wait(next_wait):
+            break
+        lock.touch()
+        result = _run_refresh_with_retries(interval, args.report_path, lifecycle=lifecycle)
+        if isinstance(result, Exception):
+            _write_report(
+                args.report_path,
+                {"status": "error", "refreshed_at": datetime.now(timezone.utc).isoformat(),
+                 "error": str(result)},
+            )
+            print(f"Recommendation refresh failed: {result}", flush=True)
+        recovery_rounds = recovery_rounds + 1 if _needs_recovery(result) else 0
+        next_wait = _next_refresh_wait(result, recovery_rounds)
+        if recovery_rounds > MAX_RECOVERY_ROUNDS:
+            recovery_rounds = 0
+    return 0
 
 
 # Refresh candidate intelligence, finalize it when eligible and persist the iteration report.
@@ -142,16 +146,22 @@ def _run_refresh_with_retries(
     report_path: Path,
     *,
     attempts: int = 3,
+    lifecycle: WorkerLifecycle | None = None,
 ) -> RecommendationIntelligenceResponse | Exception | None:
     """Retry transient provider failures so the 08:00 finalization is not skipped."""
 
     for attempt in range(1, max(attempts, 1) + 1):
+        if lifecycle is not None and lifecycle.stop_requested:
+            return None
         try:
             return _run_refresh(interval, report_path)
         except Exception as error:  # noqa: BLE001
-            if attempt >= max(attempts, 1):
+            if attempt >= max(attempts, 1) or (lifecycle is not None and lifecycle.stop_requested):
                 return error
-            time.sleep(5)
+            if lifecycle is not None:
+                lifecycle.wait(5)
+            else:
+                time.sleep(5)
     return None
 
 

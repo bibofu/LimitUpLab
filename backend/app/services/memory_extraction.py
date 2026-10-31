@@ -7,6 +7,7 @@ chat path, and writes ``status='candidate'`` rows for explicit confirmation.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from contextlib import closing
 from hashlib import sha256
 import json
@@ -431,7 +432,7 @@ class MemoryExtractionWorker:
         self.last_expired_candidates = 0
         self.last_expired_memories = 0
 
-    def run_once(self, *, limit: int = 5) -> int:
+    def run_once(self, *, limit: int = 5, should_stop: Callable[[], bool] | None = None) -> int:
         if auto_learn_mode() == "off":
             return 0
         maintenance = LongTermMemoryRepository(self.database_url)
@@ -439,6 +440,8 @@ class MemoryExtractionWorker:
         self.last_expired_memories = maintenance.expire_active_memories()
         processed = 0
         for _ in range(max(1, min(limit, 50))):
+            if should_stop is not None and should_stop():
+                break
             job = self._claim()
             if job is None:
                 break

@@ -43,7 +43,7 @@ class RecommendationRefreshLoopTest(unittest.TestCase):
     def test_worker_reconciles_state_before_first_scheduled_wait(self) -> None:
         observed = []
 
-        def reconcile(*_args):
+        def reconcile(*_args, **_kwargs):
             observed.append("reconcile")
 
         def stop_at_wait(_seconds):
@@ -55,7 +55,9 @@ class RecommendationRefreshLoopTest(unittest.TestCase):
         ), patch.object(worker, "RefreshLoopLock") as lock, patch.object(
             worker, "_run_refresh_with_retries", side_effect=reconcile,
         ), patch.object(worker, "_seconds_until_next_premarket_refresh", return_value=60), patch.object(
-            worker.time, "sleep", side_effect=stop_at_wait,
+            worker.WorkerLifecycle, "wait", side_effect=stop_at_wait,
+        ), patch.object(
+            worker.WorkerLifecycle, "ready",
         ):
             with self.assertRaises(StopIteration):
                 worker.main()

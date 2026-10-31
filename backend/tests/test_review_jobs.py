@@ -52,3 +52,28 @@ def test_review_disabled_skips_sampling_and_jobs(postgresql_database, monkeypatc
     assert service.run_once(limit=5) == {
         "sampled_runs": 0, "processed_jobs": 0, "aggregated_signals": 0,
     }
+
+
+def test_shutdown_finishes_current_review_job_without_claiming_next(postgresql_database, monkeypatch):
+    monkeypatch.setenv("LIMITUPLAB_REVIEW_ENABLED", "true")
+    monkeypatch.setenv("LIMITUPLAB_REVIEW_SAMPLE_RATE", "0")
+    owner = fixture_owner("a4")
+    for index in range(2):
+        completed_run(owner, f"review-shutdown-{index}")
+    service = ReviewJobService()
+    assert service.enqueue_manual_sample(limit=5) == 2
+    processed = []
+    process_job = service._process_job
+
+    def finish_then_stop(job):
+        process_job(job)
+        processed.append(job["job_id"])
+
+    monkeypatch.setattr(service, "_process_job", finish_then_stop)
+    result = service.run_once(limit=10, should_stop=lambda: bool(processed))
+    jobs = service.list_jobs()
+    assert result["processed_jobs"] == 1
+    assert next(job for job in jobs if job.job_id == processed[0]).status == "succeeded"
+    assert all(job.status == "pending" for job in jobs if job.job_id not in processed)
+    # Remaining work is retained for the next worker, rather than claimed and abandoned.
+    assert service.run_once(limit=10)["processed_jobs"] >= 1

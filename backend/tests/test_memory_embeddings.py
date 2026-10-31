@@ -111,6 +111,6 @@ def test_embedding_worker_main_exits_without_claiming_lease_when_disabled(
     from scripts import run_memory_embeddings as worker
 
     monkeypatch.setenv("LIMITUPLAB_MEMORY_EMBEDDINGS", "off")
-    monkeypatch.setattr(worker.LeaseStore, "claim", lambda *args, **kwargs: pytest.fail("lease claimed"))
+    monkeypatch.setattr(worker.WorkerLifecycle, "claim", lambda *args, **kwargs: pytest.fail("lease claimed"))
     assert worker.main(["--once"]) == 0
     assert "disabled" in capsys.readouterr().out

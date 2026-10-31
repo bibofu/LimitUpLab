@@ -6,7 +6,6 @@ import argparse
 import json
 from pathlib import Path
 import sys
-from time import sleep
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -19,7 +18,7 @@ from app.services.memory_embeddings import (
     embed_texts,
     memory_embedding_text,
 )
-from app.services.runtime_coordination import LeaseStore
+from app.services.worker_lifecycle import WorkerLifecycle
 
 
 def process_batch(repository, *, limit=100) -> int:
@@ -61,27 +60,23 @@ def main(argv=None) -> int:
     if not embeddings_enabled():
         print(json.dumps({"embeddings": "disabled"}, ensure_ascii=False))
         return 0
-    lease = LeaseStore().claim("job:memory-embeddings", ttl=300)
-    if lease is None:
-        print(json.dumps({"embeddings": "already_running"}, ensure_ascii=False))
-        return 0
-    lease.start_heartbeat()
-    repository = LongTermMemoryRepository()
-    total = 0
-    try:
-        while not lease.lost.is_set():
+    with WorkerLifecycle("memory-embeddings") as lifecycle:
+        lease = lifecycle.claim()
+        if lease is None:
+            print(json.dumps({"embeddings": "already_running"}, ensure_ascii=False))
+            return 0
+        repository = LongTermMemoryRepository()
+        total = 0
+        lifecycle.ready()
+        while not lifecycle.stop_requested and not lease.lost.is_set():
             updated = process_batch(repository, limit=max(1, min(args.limit, 500)))
             total += updated
             print(json.dumps({"updated": updated, "total": total}, ensure_ascii=False),
                   flush=True)
             if args.once:
                 return 0
-            sleep(max(2.0, args.interval) if updated else max(5.0, args.interval))
-        return 1
-    except KeyboardInterrupt:
-        return 0
-    finally:
-        lease.release()
+            lifecycle.wait(max(2.0, args.interval) if updated else max(5.0, args.interval))
+        return 0 if lifecycle.stop_requested else 1
 
 
 if __name__ == "__main__":

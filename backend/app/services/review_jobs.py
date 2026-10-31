@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Callable
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -298,7 +299,7 @@ class ReviewJobService:
             db.commit()
         return {"deterministic_jobs": int(deterministic), "judge_jobs": int(judge)}
 
-    def run_once(self, *, limit: int = 10) -> dict[str, int]:
+    def run_once(self, *, limit: int = 10, should_stop: Callable[[], bool] | None = None) -> dict[str, int]:
         """Backfill signals, enqueue detectors, process jobs and aggregate."""
 
         settings = review_settings()
@@ -310,6 +311,8 @@ class ReviewJobService:
         sampled = self.sample_recent_runs()
         processed = 0
         for _ in range(max(1, min(limit, 50))):
+            if should_stop is not None and should_stop():
+                break
             job = self._claim_job()
             if job is None:
                 break
