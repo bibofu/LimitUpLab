@@ -16,6 +16,7 @@ def test_playbook_uses_the_aggregate_and_never_mentions_market_summary():
     assert 'market_event_pool(event_type="limit_up", result_mode="summary"' in DAILY_REVIEW_SKILL
     assert "禁止用事件行相加重算" in DAILY_REVIEW_SKILL
     assert "market_summary" not in DAILY_REVIEW_SKILL
+    assert "不含成交量" in DAILY_REVIEW_SKILL
     assert "不输出买入、卖出、仓位、目标价" in DAILY_REVIEW_SKILL
 
 

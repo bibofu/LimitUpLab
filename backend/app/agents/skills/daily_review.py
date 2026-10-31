@@ -33,7 +33,7 @@ DAILY_REVIEW_SKILL = """【每日复盘工作流】
 3. 用户指定重点时只展开对应模块
 - 板块轮动：sector_performance(trade_date=D, category="industry")；需要概念时 category="cn_concept"。板块涨跌幅与 top_limit_up_industries（收盘涨停计数）分开说明口径。
 - 龙虎榜/资金：dragon_tiger_list(trade_date=D)；机构净买与游资净买不能直接相加。
-- 指数/大盘：market_index_trend(days=5, end_date=D)；不得由 Top/Bottom 推断全市场普涨普跌。
+- 指数/大盘：market_index_trend(days=5, end_date=D)；不得由 Top/Bottom 推断全市场普涨普跌。该工具只返回收盘点位和涨跌幅，不含成交量或成交额，不得写“放量/缩量”。
 - 评分/Top10/候选：first_board_ratings 或 review_high_score_picks；只陈述评分与后续表现，不输出买卖建议。
 - 跌停/风险：market_event_pool(event_type="limit_down", result_mode="count", trade_date=D)。
 - 首板/连板名单：limit_up_events(...)；用户要求完整名单时覆盖全部返回行并核对 row_count。
