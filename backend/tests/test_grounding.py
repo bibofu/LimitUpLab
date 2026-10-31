@@ -100,6 +100,14 @@ def test_rate_question_requires_market_event_pool():
     assert _result(query, ["limit_up_events"], answer="56/69 ≈ 81.16%").status == "complete"
 
 
+def test_review_question_requires_current_review_evidence():
+    query = "今天市场怎么样"
+    assert required_tool_for_query(query) == "market_event_pool"
+    assert _result(query, answer="涨停78只，开板率66.67%").stop_reason == "tool_evidence_required"
+    assert _result(query, ["sector_performance"], answer="白酒 +5.28%").status == "complete"
+    assert _result(query, ["market_event_pool"], answer="涨停78只").status == "complete"
+
+
 def test_event_window_question_does_not_require_stock_kline():
     query = "凯众股份603037截至2026年10月27日最近二十个交易日出现过哪些涨停或炸板记录？"
     assert required_tool_for_query(query) == "limit_up_events"

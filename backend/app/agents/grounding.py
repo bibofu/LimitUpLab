@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 
 from app.agents.session_history import is_session_recap_query
+from app.agents.skills import REVIEW_SKILL_TERMS
 
 
 # Queries that clearly need a specific current-run tool. This is deliberately
@@ -14,6 +15,7 @@ _REQUIRED_TOOL_TERMS = (
     ("market_event_pool", (
         "开板率", "炸板未回封率", "未回封率", "触板股",
     )),
+    ("market_event_pool", REVIEW_SKILL_TERMS),
     ("stock_kline", (
         "k线", "K线", "收盘价", "成交量", "均线", "量比", "回撤",
         "价格与成交量",
@@ -37,7 +39,11 @@ _TOOL_MISSING_PHRASES = ("需要本轮", "没有相应工具", "工具的可核�
 # A rate question can be answered from the canonical aggregate or from the
 # single-day row tool when its event_summary is explicitly market-day scoped.
 _REQUIRED_TOOL_ALTERNATIVES = {
-    "market_event_pool": {"market_event_pool", "limit_up_events"},
+    "market_event_pool": {
+        "market_event_pool", "limit_up_events", "daily_board_promotion",
+        "sector_performance", "dragon_tiger_list", "market_index_trend",
+        "first_board_ratings", "review_high_score_picks",
+    },
 }
 _DATE_OR_TIME = re.compile(
     r"(20\d{2}[-年]\d{1,2}[-月]\d{1,2}日?|\b\d{1,2}:\d{2}(?::\d{2})?\b)"
