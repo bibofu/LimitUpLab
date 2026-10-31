@@ -23,6 +23,7 @@ from app.repositories.recommendation_intelligence_repository import (
     RecommendationIntelligenceRepository,
 )
 from app.repositories.scoring_policy_repository import ScoringPolicyRepository
+from app.repositories.sector_repository import SectorRepository
 from app.repositories.stock_news_repository import StockNewsRepository
 
 __all__ = [
@@ -42,6 +43,7 @@ __all__ = [
     "RecommendationIntelligenceRepository",
     "ReviewSnapshotRepository",
     "ScoringPolicyRepository",
+    "SectorRepository",
     "StockNewsRepository",
     "get_limit_up_repository",
 ]
