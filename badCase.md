@@ -1,5 +1,12 @@
 # Agent 问答回归记录
 
+## 2026-10-31：market_summary 固定复盘模板与事件工具口径冲突，改为复盘 skill
+
+- 原表现：`market_summary` 固定返回涨停/首板/连板/开板率/最高板/热门行业，8 个字段与 `limit_up_events`、`market_event_pool` 重叠。同一天 2026-10-30，`market_summary` 返回触及 78/收盘 47/开板 52/未回封 31（66.67%/39.74%），而 `limit_up_events` 默认（只取收盘封住）的 `event_summary` 返回 47/21/0（44.68%/0%）；用户问“开板率”会因工具选择得到不同答案。`market_summary` 的跌停调用失败静默为 null，`hot_concepts` 按复合字符串分组，价值低。
+- 原因：固定一版复盘模板；`event_summary` 在行过滤之后计算；聚合事实没有唯一入口。
+- 修复：删除 `market_summary` 工具；`market_event_pool(event_type="limit_up", result_mode="summary")` 成为当日聚合唯一入口（touched/closed/opened/unsealed、两个比率、首板/连板/最高板、收盘涨停行业计数）；`limit_up_events.event_summary` 改为在所选日期和市场范围的全部触及事件上计算（先于板数/状态/关键词过滤），并返回 `filtered_count`/`scope`；新增产品内 `daily-review` skill（`app/agents/skills/daily_review.py`），按复盘/收盘总结/今天市场/市场情绪等意图追加到 system prompt，默认紧凑复盘，按用户关注点加载板块/龙虎榜/指数/评分工具；`review` profile 只保留日历、聚合、涨停事件和晋级四个基础工具，其他工具按关键词作为 extras；`grounding.py` 要求复盘问题本轮至少包含一个复盘证据工具，防止复用上一轮数字。
+- 验证：`limit_up_events` 默认与 `event_status=all` 的 `event_summary` 现在都与 `market_event_pool(summary)` 一致（78/47/52/31，66.67%/39.74%）。真实三问：①“复盘今天” → `trading_calendar`/`market_event_pool`/`limit_up_events`/`daily_board_promotion`，`complete`，18.4 秒；②“复盘今天板块轮动” → `sector_performance`（行业+概念），`complete`，10.1 秒；③“今天市场怎么样” → 本轮重新调用 `market_event_pool`/`market_index_trend`/`daily_board_promotion`，`complete`，15.9 秒，未复用上一轮数字。定向 80 项 + 事件/复盘证据 40 项通过；后端全量 2201 passed、3 skipped、22 subtests passed。
+
 ## 2026-10-31：板块工具全市场排行 30 秒仍不完整，成分股只返回前 10
 
 - 原表现：`sector_performance(sector=None)` 对 320 个行业指数逐个拉日线，共享限速 1 次/秒，30 秒预算下只覆盖 27/320，返回 `partial` 且没有前 5/后 5；指定板块冷启动 5.6 秒。`sector_stock_ranking` 只返回前 10/20 只，无法回答“汽车板块有哪些股票”。
