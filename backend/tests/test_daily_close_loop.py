@@ -116,6 +116,10 @@ class DailyCloseLoopTest(unittest.TestCase):
                 items=[],
             ),
         )
+        arguments.setdefault(
+            "sector_syncer",
+            lambda repository, trade_date: {"trade_date": trade_date.isoformat(), "stub": True},
+        )
         return execute_daily_close_loop(**arguments)
 
     # Regression scenario: same day after close persists live prediction.
@@ -170,6 +174,10 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertEqual(
             persisted.report["recommendation_refresh"]["target_trade_date"],
             "2026-08-24",
+        )
+        self.assertEqual(
+            persisted.report["sector_sync"]["trade_date"],
+            target_date.isoformat(),
         )
 
     # Regression scenario: recommendation refresh failure is retried.

@@ -34,9 +34,11 @@ from app.repositories import (
     FirstBoardRepository,
     LimitUpRepository,
     ReviewSnapshotRepository,
+    SectorRepository,
 )
 from app.services.daily_review import build_daily_review_snapshot
 from app.services.recommendation_intelligence import refresh_recommendation_intelligence
+from app.services.sector_sync import sync_sector_daily
 from app.services.system_health import expected_local_data_date
 from scripts.update_daily_data import DailyUpdateReport, run_daily_update
 
@@ -52,6 +54,7 @@ UpdateRunner = Callable[..., DailyUpdateReport]
 SleepFunction = Callable[[float], None]
 ReviewSnapshotBuilder = Callable[..., DailyReviewSnapshot]
 RecommendationRefresher = Callable[..., RecommendationIntelligenceResponse]
+SectorSyncer = Callable[[SectorRepository, date], dict[str, object]]
 
 
 class DailyCloseLoopAlreadyRunning(RuntimeError):
@@ -176,6 +179,7 @@ def execute_daily_close_loop(
     update_runner: UpdateRunner = run_daily_update,
     review_snapshot_builder: ReviewSnapshotBuilder = build_daily_review_snapshot,
     recommendation_refresher: RecommendationRefresher = refresh_recommendation_intelligence,
+    sector_syncer: SectorSyncer = sync_sector_daily,
     sleep_fn: SleepFunction = time_module.sleep,
 ) -> DailyCloseLoopExecution:
     """Resolve, lock, retry and audit one complete after-close pipeline run."""
@@ -245,6 +249,7 @@ def execute_daily_close_loop(
             last_error: str | None = None
             incomplete_reasons: list[str] = []
             recommendation_refresh_payload: dict[str, object] | None = None
+            sector_sync_payload: dict[str, object] | None = None
             attempts = max(1, max_attempts)
 
             for attempt in range(1, attempts + 1):
@@ -300,6 +305,16 @@ def execute_daily_close_loop(
                             "refreshed_at": recommendation.refreshed_at.isoformat(),
                             "item_count": len(recommendation.items),
                         }
+                    if live_eligible and sector_sync_payload is None:
+                        try:
+                            sector_sync_payload = sector_syncer(
+                                SectorRepository(first_repo.database_url),
+                                target.trade_date,
+                            )
+                        except Exception as error:  # noqa: BLE001 - auxiliary data
+                            last_report.warnings.append(
+                                f"sector sync skipped: {type(error).__name__}"
+                            )
                     incomplete_reasons = _incomplete_reasons(
                         last_report,
                         live_eligible=live_eligible,
@@ -357,6 +372,7 @@ def execute_daily_close_loop(
                 "live_prediction_eligible": live_eligible,
                 "pipeline": report_payload,
                 "recommendation_refresh": recommendation_refresh_payload,
+                "sector_sync": sector_sync_payload,
                 "review_snapshot": review_snapshot_payload,
                 "incomplete_reasons": incomplete_reasons,
             }
