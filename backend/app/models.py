@@ -151,6 +151,60 @@ class SectorRankingItem(BaseModel):
     leader_change_pct: float | None = Field(default=None, description="领涨股涨跌幅（%）")
 
 
+class SectorConstituentItem(BaseModel):
+    """One current constituent of an industry or concept board."""
+
+    symbol: str = Field(description="股票代码")
+    name: str = Field(description="股票名称")
+
+
+class SectorConstituentGroup(BaseModel):
+    """One resolved board inside a group or an alternative match."""
+
+    sector_name: str = Field(description="板块名称")
+    thscode: str = Field(description="板块数据源标识")
+    member_count: int = Field(description="该板块成分股数")
+
+
+class SectorConstituentsFacts(BaseModel):
+    """Current constituent list for one board or a group of boards."""
+
+    requested_sector: str = Field(description="请求的板块名")
+    sector_name: str = Field(description="解析后的板块名")
+    sector_category: Literal["industry", "concept"] = Field(description="板块类别")
+    group: bool = Field(default=False, description="是否把多个同层级板块合并为一个分组")
+    thscodes: list[str] = Field(default_factory=list, description="本次读取的板块代码")
+    member_count: int = Field(description="去重后的成分股总数")
+    row_count: int = Field(description="本次返回的成分股数")
+    truncated: bool = Field(default=False, description="是否因limit截断")
+    data_as_of: date = Field(description="成分股缓存刷新日期")
+    items: list[SectorConstituentItem] = Field(default_factory=list, description="成分股列表")
+    matched_sectors: list[SectorConstituentGroup] = Field(default_factory=list, description="分组或候选板块")
+    sources: list[str] = Field(default_factory=list, description="数据来源")
+    data_missing: list[str] = Field(default_factory=list, description="数据缺口")
+
+
+class SectorPerformanceMember(BaseModel):
+    """One board's current and historical facts inside a group answer."""
+
+    sector_name: str = Field(description="板块名称")
+    thscode: str = Field(description="板块数据源标识")
+    change_pct: float | None = Field(default=None, description="目标交易日涨跌幅（%）")
+    rank: int | None = Field(default=None, description="目标交易日行业/概念排名")
+    amount_yi: float | None = Field(default=None, description="成交额（亿元）")
+    net_inflow_yi: float | None = Field(default=None, description="资金净流入（亿元）")
+    up_count: int | None = Field(default=None, description="上涨家数")
+    down_count: int | None = Field(default=None, description="下跌家数")
+    leader_name: str | None = Field(default=None, description="领涨股")
+    leader_change_pct: float | None = Field(default=None, description="领涨股涨跌幅（%）")
+    return_5d_pct: float | None = Field(default=None, description="5日区间收益（%）")
+    return_20d_pct: float | None = Field(default=None, description="20日区间收益（%）")
+    data_as_of: date = Field(description="该板块数据截止交易日")
+    data_fresh: bool = Field(description="是否覆盖请求日期")
+    history: list[SectorHistoryPoint] = Field(default_factory=list, description="该板块逐日历史")
+    data_missing: list[str] = Field(default_factory=list, description="该板块数据缺口")
+
+
 class SectorPerformanceFacts(BaseModel):
     """Tool-ready industry performance, breadth, ranking and recent trend facts."""
 
@@ -182,44 +236,8 @@ class SectorPerformanceFacts(BaseModel):
     matched_sectors: list[SectorRankingItem] = Field(default_factory=list, description="名称匹配的板块")
     history: list[SectorHistoryPoint] = Field(default_factory=list, description="指定板块逐日历史，每项含trade_date、close、change_pct")
     sources: list[str] = Field(default_factory=list, description="数据来源")
-
-
-class SectorStockTrendItem(BaseModel):
-    """One sector constituent ranked by deterministic close-based trend facts."""
-
-    rank: int = Field(description="本次趋势比较排名")
-    symbol: str = Field(description="股票代码")
-    name: str = Field(description="股票名称")
-    trend_score: float = Field(description="趋势综合分")
-    trend: Literal["rising", "oscillating", "falling", "insufficient"] = Field(description="趋势标签：rising、oscillating、falling或insufficient")
-    data_as_of: date = Field(description="该股数据截止交易日")
-    latest_close: float = Field(description="最新收盘价（元）")
-    return_5d_pct: float | None = Field(default=None, description="5日区间涨跌幅（%）")
-    return_20d_pct: float | None = Field(default=None, description="20日区间涨跌幅（%）")
-    ma5: float | None = Field(default=None, description="5日均线（元）")
-    ma10: float | None = Field(default=None, description="10日均线（元）")
-    ma20: float | None = Field(default=None, description="20日均线（元）")
-    volume_ratio_5d: float | None = Field(default=None, description="近5日量比")
-    max_drawdown_pct: float | None = Field(default=None, description="区间最大回撤（%）")
-
-
-class SectorStockRankingFacts(BaseModel):
-    """A bounded, auditable trend ranking for one industry or concept."""
-
-    requested_sector: str = Field(description="请求的板块名")
-    sector_name: str = Field(description="解析后的板块名")
-    sector_category: Literal["industry", "concept"] = Field(description="板块类别：industry或concept")
-    sector_thscode: str = Field(description="板块数据源标识")
-    requested_days: int = Field(description="趋势比较窗口")
-    requested_limit: int = Field(description="请求返回数量")
-    data_as_of: date = Field(description="数据截止交易日")
-    member_count: int = Field(description="板块成分股总数")
-    analyzed_count: int = Field(description="完成趋势比较的股票数")
-    missing_count: int = Field(description="因数据缺失未比较的股票数")
-    truncated_count: int = Field(description="因数量上限未返回的股票数")
-    items: list[SectorStockTrendItem] = Field(default_factory=list, description="趋势排名")
-    sources: list[str] = Field(default_factory=list, description="数据来源")
-    warnings: list[str] = Field(default_factory=list, description="覆盖范围说明")
+    aggregation: Literal["single", "equal_weight"] = Field(default="single", description="单板块或分组的聚合口径")
+    members: list[SectorPerformanceMember] = Field(default_factory=list, description="分组内各子板块明细")
 
 
 class FinanceNewsItem(BaseModel):

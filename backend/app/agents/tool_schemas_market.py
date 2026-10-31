@@ -109,12 +109,12 @@ MARKET_TOOL_SCHEMAS = [
         dates=("trade_date",),
         collection="top_sectors",
         description=(
-            "按需获取A股行业或概念板块行情。可查询指定板块的涨跌幅、排名、成交额、"
-            "资金净流入、上涨/下跌家数、领涨股和近期趋势；sector 为空时返回行业强弱榜。"
-            "有日期的行业强弱榜按本次取得的行业指数目录核对目标日及前交易日收盘，完整覆盖才返回涨跌前5。"
-            "仅询问当日行业表现或强弱时，日期匹配的完整榜单已足够回答；未要求多日趋势、资金或成分股时，不逐一补查入榜行业。"
-            "ranking_complete=false时说明本次排名缺口，其他日期或任意行业抽样不能替代该日完整排名。"
-            "Top/Bottom摘要不能证明全市场普涨普跌或板块内部上涨广度，不推断未提供的资金流向、行业分类隶属和领涨股。"
+            "查询A股行业或概念板块行情，数据来自收盘后同步到本地数据库的板块日线。"
+            "sector 为空时返回指定交易日/最近交易日的行业强弱榜（默认90个同花顺行业，前5/后5）；"
+            "category=cn_concept 时返回概念榜（只有涨跌幅和成交额）。"
+            "sector 有值时返回该板块的涨跌幅、排名、成交额、资金净流入、上涨/下跌家数、领涨股、5/20日收益和近20日走势；"
+            "汽车、军工等宽泛名称按子板块分组返回，并给出等权平均（aggregation=equal_weight），不伪造官方板块指数。"
+            "ranking_complete=false 或 data_fresh=false 时必须说明覆盖/日期缺口；历史日期的广度和资金字段可能为 null，不得填零。"
         ),
         args_schema={
             "type": "object",
@@ -122,62 +122,77 @@ MARKET_TOOL_SCHEMAS = [
                 "sector": {
                     "type": ["string", "null"],
                     "description": (
-                        "Industry or concept name such as 半导体 or AI; "
-                        "omit for overall industry ranking."
+                        "Industry or concept name such as 半导体, 汽车 or AI; "
+                        "omit for the whole-market ranking."
                     ),
                 },
                 "trade_date": {
                     "type": ["string", "null"],
-                    "description": "YYYY-MM-DD; omit/null to use the latest complete local trading day. Only when no local date exists is an undated current snapshot used.",
+                    "description": "YYYY-MM-DD; omit for the latest local trade date.",
+                },
+                "category": {
+                    "type": ["string", "null"],
+                    "enum": ["industry", "cn_concept", None],
+                    "description": "industry (default) or cn_concept for the concept ranking.",
+                },
+                "days": {
+                    "type": "integer",
+                    "minimum": 5,
+                    "maximum": 60,
+                    "description": "History window for a named sector; default 20.",
                 },
             },
             "required": [],
         },
         returns=(
-            "Sector change, market rank, breadth, turnover, fund flow, leader, "
-            "5/20-day returns where available. Dated overall rankings provide top/bottom five, "
-            "previous_trade_date and explicit coverage; ranking_universe describes the current catalog, "
-            "not reconstructed historical membership. Historical breadth/flow/leader fields may be unavailable."
+            "Whole-market ranking with top/bottom sectors, coverage and data_as_of; or one "
+            "sector's change, rank, breadth, turnover, fund flow, leader, 5/20-day returns and "
+            "history. Industry groups return member facts plus an equal-weight aggregate."
         ),
     ),
     AgentToolSchema(
-        name="sector_stock_ranking",
-        time_mode="historical",
-        dates=("end_date",),
+        name="sector_stocks",
+        time_mode="retrieved_now",
         collection="items",
-        notes="Constituent coverage may be partial; inspect coverage before market-wide claims.",
+        notes=(
+            "Current constituent membership from a cached Tonghuashun directory, not historical "
+            "membership. The list is not a price or trend ranking."
+        ),
         description=(
-            "解析同花顺行业或概念板块成分股，并按截至最新完整收盘日的K线趋势排序。"
-            "适合回答游戏板块哪些股票走势好、半导体近期强势股等问题；结果是历史趋势比较，"
-            "不是未来涨跌预测。"
+            "按板块名列出当前成分股代码和名称。行业和概念都支持；"
+            "汽车、军工等宽泛名称会把同层级子板块合并为一个分组并按代码去重。"
+            "用于回答“汽车板块有哪些股票”“半导体板块包含哪些公司”；"
+            "不提供涨跌排序，需要板块走势或排行时用 sector_performance。"
         ),
         args_schema={
             "type": "object",
             "properties": {
                 "sector": {
                     "type": "string",
-                    "description": "Industry or concept name, such as 游戏 or 半导体.",
+                    "description": "Industry or concept name, such as 汽车 or 半导体.",
                 },
-                "days": {"type": "integer", "minimum": 5, "maximum": 60},
+                "category": {
+                    "type": ["string", "null"],
+                    "enum": ["industry", "cn_concept", None],
+                    "description": "Optional category when the same name exists in both taxonomies.",
+                },
                 "limit": {
                     "type": "integer",
                     "minimum": 1,
-                    "maximum": 20,
-                    "description": (
-                        "Return 10 stocks unless the user explicitly asks for "
-                        "another count."
-                    ),
+                    "maximum": 500,
+                    "description": "Maximum rows to return; default 500. truncated=true when reduced.",
                 },
-                "end_date": {
+                "sort_by": {
                     "type": ["string", "null"],
-                    "description": "YYYY-MM-DD; omit for the latest local trade date.",
+                    "enum": ["symbol", "name", None],
+                    "description": "Row order; default symbol.",
                 },
             },
             "required": ["sector"],
         },
         returns=(
-            "Resolved sector name/category, constituent coverage, data cutoff and ranked "
-            "stocks with 5/20-day returns, moving-average trend, volume ratio and drawdown."
+            "Resolved sector/group, member_count, row_count, truncated, items with symbol/name, "
+            "matched_sectors, data_as_of and sources."
         ),
     ),
     AgentToolSchema(

@@ -22,7 +22,7 @@ SINGLE_STOCK_TOOLS = frozenset({
 # Tools whose rows are statistical summaries rather than stock lists.
 ANALYSIS_TOOLS = frozenset({
     "daily_board_promotion", "market_summary", "sector_performance",
-    "sector_stock_ranking", "hot_stock_ranking", "dragon_tiger_list",
+    "hot_stock_ranking", "dragon_tiger_list",
     "recent_limit_up_returns", "post_limit_statistics", "market_event_pool",
     "stock_kline", "market_index_trend",
 })
@@ -282,6 +282,8 @@ def _primary_stocks(tool: str | None, payload: dict[str, Any]) -> tuple[list[dic
 
     top_symbol = _a_share_symbol(payload.get("symbol"))
     rows = payload.get("rows")
+    if not isinstance(rows, list):
+        rows = payload.get("items")
     row_symbols = 0
     if top_symbol:
         add(top_symbol, _payload_stock_name(payload, tool), payload.get("data_as_of")

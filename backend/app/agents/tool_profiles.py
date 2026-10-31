@@ -33,6 +33,7 @@ LIMIT_UP_TERMS = (
 )
 SECTOR_TERMS = (
     "板块", "行业", "概念", "题材", "热股", "热度", "涨幅榜", "资金流", "轮动",
+    "成分股",
 )
 GENERIC_MARKET_TERMS = ("市场", "情绪", "成交额")
 NEWS_TERMS = ("新闻", "快讯", "资讯", "消息", "财联社")
@@ -57,7 +58,7 @@ PROFILE_TOOLS: dict[str, frozenset[str]] = {
         "daily_board_promotion", "dragon_tiger_list", "first_board_filter",
     }),
     "sector": frozenset({
-        "market_summary", "sector_performance", "sector_stock_ranking",
+        "market_summary", "sector_performance", "sector_stocks",
         "hot_stock_ranking",
     }),
     "market": frozenset({
@@ -79,7 +80,7 @@ PROFILE_TOOLS: dict[str, frozenset[str]] = {
 PROFILE_TOOLS["general"] = frozenset(
     PROFILE_TOOLS["market"]
     | PROFILE_TOOLS["news"]
-    | {"stock_profile", "stock_kline", "stock_financials"}
+    | {"stock_profile", "stock_kline", "stock_financials", "sector_stocks"}
 )
 PROFILE_TOOLS["full"] = frozenset(V1_CLOSED_MARKET_TOOL_NAMES)
 

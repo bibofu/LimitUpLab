@@ -26,7 +26,7 @@ PERSISTENCE_MARKERS = (
 )
 SAFE_AUTO_DISPLAY_TOOLS = frozenset({
     "trading_calendar", "market_summary", "market_index_trend",
-    "daily_board_promotion", "sector_performance", "sector_stock_ranking",
+    "daily_board_promotion", "sector_performance", "sector_stocks",
     "hot_stock_ranking", "dragon_tiger_list", "finance_news", "stock_news",
     "stock_activity", "stock_profile", "first_board_ratings",
     "market_event_pool", "limit_up_events", "recent_limit_up_returns",

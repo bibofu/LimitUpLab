@@ -44,8 +44,13 @@ from app.models import (
     LimitUpEvent,
     MarketCalendarFacts,
     MarketIndexTrendFacts,
+    SectorConstituentGroup,
+    SectorConstituentItem,
+    SectorConstituentsFacts,
+    SectorHistoryPoint,
     SectorPerformanceFacts,
-    SectorStockRankingFacts,
+    SectorPerformanceMember,
+    SectorRankingItem,
     StockActivityFacts,
     StockKLineFacts,
     StockNewsFacts,
@@ -53,6 +58,7 @@ from app.models import (
 from app.repositories import (
     FirstBoardRepository,
     RecommendationIntelligenceRepository,
+    SectorRepository,
     StockNewsRepository,
 )
 from app.services.analysis import (
@@ -62,8 +68,8 @@ from app.services.analysis import (
 )
 from app.services.daily_promotion import build_daily_promotion_report
 from app.services.finance_news import collect_finance_news
-from app.services.sector_performance import build_sector_performance
-from app.services.sector_stock_ranking import build_sector_stock_ranking
+from app.services.sector_resolution import SectorMatch, SectorNotFound, resolve_sector
+from app.services.sector_sync import ensure_constituents, ensure_history, sync_catalog
 from app.services.stock_kline import build_stock_kline_facts
 from app.services.stock_financials import build_stock_financials_facts
 from app.services.stock_profile import build_stock_profile
@@ -105,7 +111,7 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "market_summary",
         "market_index_trend",
         "sector_performance",
-        "sector_stock_ranking",
+        "sector_stocks",
         "hot_stock_ranking",
         "finance_news",
         "stock_news",
@@ -190,12 +196,16 @@ class AgentToolRegistry:
         first_board_repository: FirstBoardRepository | None = None,
         hithink_collector: HithinkFinanceCollector | None = None,
         profile: str | None = None,
+        sector_repository: SectorRepository | None = None,
     ):
         """Create a registry bound to current request data dependencies."""
 
         self.events = events
         self.first_board_repository = first_board_repository or FirstBoardRepository()
         self.hithink_collector = hithink_collector or HithinkFinanceCollector()
+        self.sector_repository = sector_repository or SectorRepository(
+            getattr(self.first_board_repository, "database_url", None)
+        )
         self.profile = resolve_agent_profile(profile)
         self._stock_name_directory: dict[str, str] | None = None
 
@@ -399,104 +409,353 @@ class AgentToolRegistry:
         self,
         sector: str | None = None,
         trade_date: date | None = None,
+        category: str | None = None,
+        days: int = 20,
     ) -> ToolResult:
-        """Return on-demand sector ranking, breadth and trend facts."""
+        """Return a local board ranking or one board's trend facts."""
 
-        latest_local_date = max(
-            (item.trade_date for item in self.events),
-            default=None,
+        target_date = trade_date or max(
+            (item.trade_date for item in self.events), default=date.today(),
         )
-        response: SectorPerformanceFacts = build_sector_performance(
-            sector=sector,
-            trade_date=trade_date or latest_local_date,
-        )
-        trace_output = response.model_dump(mode="json")
-        if response.matched_sectors:
-            matches = "、".join(
-                f"{item.sector_name}({item.change_pct:+.2f}%)"
-                for item in response.matched_sectors
+        requested_days = max(5, min(int(days or 20), 60))
+        requested_category = category if category in {"industry", "cn_concept"} else None
+        repository = self.sector_repository
+        catalog = repository.catalog(requested_category)
+        if not catalog:
+            sync_catalog(repository)
+            catalog = repository.catalog(requested_category)
+        if not sector:
+            response = self._sector_ranking(
+                repository, target_date, requested_category or "industry",
             )
-            summary = (
-                f"{response.data_as_of.isoformat()} 与"
-                f"{response.requested_sector or response.sector_name}匹配的板块："
-                f"{matches}。"
-            )
-        elif response.sector_name:
-            label = "概念" if response.sector_type == "concept" else "行业"
-            parts = [
-                f"{response.data_as_of.isoformat()} {response.sector_name}{label}板块"
-            ]
-            if response.change_pct is not None:
-                parts.append(f"涨跌幅{response.change_pct}%")
-            if response.rank is not None and response.sector_count:
-                parts.append(f"{label}排名{response.rank}/{response.sector_count}")
-            if response.up_count is not None and response.down_count is not None:
-                parts.append(f"上涨{response.up_count}家、下跌{response.down_count}家")
-            summary = "，".join(parts) + "。"
         else:
-            leaders = "、".join(
-                f"{item.sector_name}({item.change_pct:+.2f}%)"
-                for item in response.top_sectors[:3]
+            try:
+                resolution = resolve_sector(catalog, sector, category=requested_category)
+            except SectorNotFound as error:
+                raise ValueError(str(error)) from error
+            response = self._sector_trend(
+                repository, resolution, target_date, requested_days,
             )
-            summary = (
-                f"{response.data_as_of.isoformat()} 行业强弱榜：{leaders}。"
-                if leaders else
-                f"{response.trade_date.isoformat()} 行业强弱榜未完整取得，详见数据缺口。"
-            )
+        summary = self._sector_summary(response)
         return ToolResult(
             name="sector_performance",
             input={
                 "sector": sector,
-                "trade_date": trade_date.isoformat() if trade_date else None,
-            },
-            output=response,
-            summary=summary,
-            trace_output=trace_output,
-            result_status="partial" if response.data_missing or not response.data_fresh else "ok",
-            data_fresh=response.data_fresh,
-        )
-
-    def sector_stock_ranking(
-        self,
-        sector: str,
-        days: int = 20,
-        limit: int = 10,
-        end_date: date | None = None,
-    ) -> ToolResult:
-        """Rank one sector's constituents by completed daily trend facts."""
-
-        latest_local_date = max(
-            (item.trade_date for item in self.events),
-            default=date.today(),
-        )
-        resolved_end_date = end_date or latest_local_date
-        response: SectorStockRankingFacts = build_sector_stock_ranking(
-            sector=sector,
-            end_date=resolved_end_date,
-            days=days,
-            limit=limit,
-            collector=self.hithink_collector,
-            repository=self.first_board_repository,
-        )
-        leaders = "、".join(
-            f"{item.name}({item.symbol})" for item in response.items[:3]
-        ) or "暂无可排名成分股"
-        summary = (
-            f"截至{response.data_as_of.isoformat()}，{response.sector_name}板块"
-            f"共{response.member_count}只成分股，完成{response.analyzed_count}只趋势比较；"
-            f"排名靠前：{leaders}。"
-        )
-        return ToolResult(
-            name="sector_stock_ranking",
-            input={
-                "sector": sector,
-                "days": response.requested_days,
-                "limit": response.requested_limit,
-                "end_date": resolved_end_date.isoformat(),
+                "trade_date": target_date.isoformat(),
+                "category": requested_category,
+                "days": requested_days,
             },
             output=response,
             summary=summary,
             trace_output=response.model_dump(mode="json"),
+            result_status="partial" if response.data_missing or not response.data_fresh else "ok",
+            data_fresh=response.data_fresh,
+        )
+
+    def _sector_ranking(
+        self, repository: SectorRepository, target_date: date, category: str,
+    ) -> SectorPerformanceFacts:
+        """Read the whole-market board ranking from the local daily table."""
+
+        summary_only = category == "industry"
+        latest = repository.latest_daily_date(
+            category, summary_only=summary_only, on_or_before=target_date,
+        )
+        latest_local = max((item.trade_date for item in self.events), default=None)
+        if (latest is None and summary_only and target_date == latest_local
+                and target_date == date.today()):
+            # One cheap summary refresh for the current session, never a loop
+            # and never for a historical date (the summary is current-only).
+            try:
+                from app.services.sector_sync import sync_industry_daily
+                sync_industry_daily(repository, target_date)
+                latest = repository.latest_daily_date(
+                    category, summary_only=True, on_or_before=target_date,
+                )
+            except Exception:  # noqa: BLE001 - return an explicit gap instead
+                latest = None
+        universe = "同花顺90个行业" if summary_only else "同花顺390个概念"
+        if latest is None:
+            return SectorPerformanceFacts(
+                trade_date=target_date, data_as_of=target_date, data_fresh=False,
+                sector_count=0, covered_sector_count=0, ranking_complete=False,
+                ranking_universe=universe, data_missing=["sector_ranking_unavailable"],
+                sources=["postgresql.sector_daily"],
+            )
+        rows = repository.daily_ranking(latest, category, summary_only=summary_only)
+        covered, expected = repository.coverage(
+            latest, category, summary_only=summary_only,
+        )
+        previous = repository.previous_daily_date(
+            latest, category, summary_only=summary_only,
+        )
+        top = [_sector_ranking_item(row, index) for index, row in enumerate(rows[:5], 1)]
+        bottom = [
+            _sector_ranking_item(row, len(rows) - index)
+            for index, row in enumerate(reversed(rows[-5:]))
+        ]
+        missing = []
+        if latest != target_date:
+            missing.append("requested_date_not_synced")
+        if covered < expected:
+            missing.append(f"sector_ranking_coverage:{covered}/{expected}")
+        return SectorPerformanceFacts(
+            trade_date=target_date, data_as_of=latest,
+            data_fresh=latest == target_date, previous_trade_date=previous,
+            sector_type="concept" if category == "cn_concept" else "industry",
+            sector_count=expected or len(rows), covered_sector_count=covered,
+            ranking_complete=bool(rows) and covered == expected,
+            ranking_universe=universe, top_sectors=top, bottom_sectors=bottom,
+            data_missing=missing,
+            sources=_unique([*[row["source"] for row in rows], "postgresql.sector_daily"]),
+        )
+
+    def _sector_trend(
+        self, repository: SectorRepository, resolution, target_date: date, days: int,
+    ) -> SectorPerformanceFacts:
+        """Read one board or an equal-weight group from local daily history."""
+
+        members: list[SectorPerformanceMember] = []
+        sources: set[str] = set()
+        failures: list[str] = []
+        for member in resolution.members:
+            try:
+                history = ensure_history(
+                    repository, member, target_date, days=days,
+                    collector=self.hithink_collector,
+                )
+            except Exception as error:  # noqa: BLE001 - keep other group members
+                history = []
+                failures.append(f"{member.name}:history_unavailable:{type(error).__name__}")
+            sources.update(item["source"] for item in history)
+            row = repository.daily_row(target_date, member.thscode)
+            if row is not None and row.get("change_pct") is not None:
+                data_as_of = target_date
+            else:
+                data_as_of = history[-1]["trade_date"] if history else target_date
+                row = repository.daily_row(data_as_of, member.thscode)
+            if row is not None:
+                sources.add(row["source"])
+            member_missing = []
+            rank = None
+            if member.category == "cn_concept" or member.in_summary:
+                ranking = repository.daily_ranking(
+                    data_as_of, member.category,
+                    summary_only=member.category == "industry",
+                )
+                rank = next(
+                    (index + 1 for index, item in enumerate(ranking)
+                     if item["thscode"] == member.thscode), None,
+                )
+            else:
+                member_missing.append("sector_rank_not_in_summary")
+            if data_as_of != target_date:
+                member_missing.append("requested_date_unavailable")
+            if row is None:
+                member_missing.append("daily_metrics_unavailable")
+            if not history:
+                member_missing.append("history_unavailable")
+            members.append(SectorPerformanceMember(
+                sector_name=member.name, thscode=member.thscode,
+                change_pct=row["change_pct"] if row else (
+                    history[-1]["change_pct"] if history else None
+                ),
+                rank=rank,
+                amount_yi=row["amount_yi"] if row else None,
+                net_inflow_yi=row["net_inflow_yi"] if row else None,
+                up_count=row["up_count"] if row else None,
+                down_count=row["down_count"] if row else None,
+                leader_name=row["leader_name"] if row else None,
+                leader_change_pct=row["leader_change_pct"] if row else None,
+                return_5d_pct=_period_return(history, 5),
+                return_20d_pct=_period_return(history, 20),
+                data_as_of=data_as_of, data_fresh=data_as_of == target_date,
+                history=[
+                    SectorHistoryPoint(
+                        trade_date=item["trade_date"], close=item["close"],
+                        change_pct=item["change_pct"],
+                    )
+                    for item in history[-days:]
+                ],
+                data_missing=member_missing,
+            ))
+        if not members:
+            raise ValueError(f"未找到与“{resolution.requested}”匹配的板块")
+
+        group_missing = _unique([
+            *failures,
+            *(code for member in members for code in member.data_missing),
+        ])
+        data_as_of = min(member.data_as_of for member in members)
+        previous = repository.previous_daily_date(
+            data_as_of, resolution.category,
+            summary_only=resolution.category == "industry" and all(
+                item.in_summary for item in resolution.members
+            ),
+        )
+        if resolution.group:
+            rows = [
+                repository.daily_row(member.data_as_of, member.thscode)
+                for member in members
+            ]
+            matched = [
+                _sector_ranking_item({**row, "name": member.sector_name}, member.rank or 0)
+                for member, row in zip(members, rows) if row is not None
+            ]
+            return SectorPerformanceFacts(
+                requested_sector=resolution.requested, sector_name=resolution.label,
+                sector_type="industry_group", trade_date=target_date,
+                data_as_of=data_as_of,
+                data_fresh=all(member.data_fresh for member in members),
+                previous_trade_date=previous, rank=None,
+                sector_count=_sector_universe_count(repository, "industry", True),
+                change_pct=_mean([member.change_pct for member in members]),
+                amount_yi=_sum_optional([member.amount_yi for member in members]),
+                net_inflow_yi=_sum_optional([member.net_inflow_yi for member in members]),
+                up_count=_sum_int([member.up_count for member in members]),
+                down_count=_sum_int([member.down_count for member in members]),
+                return_5d_pct=_mean([member.return_5d_pct for member in members]),
+                return_20d_pct=_mean([member.return_20d_pct for member in members]),
+                aggregation="equal_weight", members=members, matched_sectors=matched,
+                sources=_unique([*sources, "postgresql.sector_daily"]),
+                data_missing=group_missing,
+            )
+        member = members[0]
+        sector_count = _sector_universe_count(
+            repository, resolution.category,
+            resolution.category == "industry" and resolution.members[0].in_summary,
+        )
+        return SectorPerformanceFacts(
+            requested_sector=resolution.requested, sector_name=member.sector_name,
+            sector_type="concept" if resolution.category == "cn_concept" else "industry",
+            trade_date=target_date, data_as_of=member.data_as_of,
+            data_fresh=member.data_fresh, previous_trade_date=previous,
+            rank=member.rank, sector_count=sector_count,
+            change_pct=member.change_pct, amount_yi=member.amount_yi,
+            net_inflow_yi=member.net_inflow_yi, up_count=member.up_count,
+            down_count=member.down_count, leader_name=member.leader_name,
+            leader_change_pct=member.leader_change_pct,
+            return_5d_pct=member.return_5d_pct,
+            return_20d_pct=member.return_20d_pct, history=member.history,
+            sources=_unique([*sources, "postgresql.sector_daily"]),
+            data_missing=group_missing,
+        )
+
+    @staticmethod
+    def _sector_summary(response: SectorPerformanceFacts) -> str:
+        if not response.requested_sector:
+            leaders = "、".join(
+                f"{item.sector_name}({item.change_pct:+.2f}%)"
+                for item in response.top_sectors[:3]
+            )
+            if not leaders:
+                return f"{response.trade_date.isoformat()} 板块排行尚未同步，详见数据缺口。"
+            return (
+                f"{response.data_as_of.isoformat()} 板块排行：{leaders}；"
+                f"覆盖 {response.covered_sector_count}/{response.sector_count}。"
+            )
+        if response.aggregation == "equal_weight":
+            parts = "、".join(
+                f"{item.sector_name}({_pct(item.change_pct)})" for item in response.members
+            )
+            return (
+                f"{response.data_as_of.isoformat()} {response.sector_name}分组"
+                f"（等权平均 {_pct(response.change_pct)}）：{parts}。"
+            )
+        parts = [f"{response.data_as_of.isoformat()} {response.sector_name}板块"]
+        if response.change_pct is not None:
+            parts.append(f"涨跌幅{response.change_pct:+.2f}%")
+        if response.rank is not None and response.sector_count:
+            parts.append(f"排名{response.rank}/{response.sector_count}")
+        if response.up_count is not None and response.down_count is not None:
+            parts.append(f"上涨{response.up_count}家、下跌{response.down_count}家")
+        if response.return_5d_pct is not None:
+            parts.append(f"5日{response.return_5d_pct:+.2f}%")
+        return "，".join(parts) + "。"
+
+    def sector_stocks(
+        self,
+        sector: str,
+        category: str | None = None,
+        limit: int = 500,
+        sort_by: str | None = "symbol",
+    ) -> ToolResult:
+        """List current constituents for one board or a same-level group."""
+
+        requested_category = category if category in {"industry", "cn_concept"} else None
+        repository = self.sector_repository
+        catalog = repository.catalog(requested_category)
+        if not catalog:
+            sync_catalog(repository)
+            catalog = repository.catalog(requested_category)
+        try:
+            resolution = resolve_sector(catalog, sector, category=requested_category)
+        except SectorNotFound as error:
+            raise ValueError(str(error)) from error
+        collected: dict[str, dict[str, str]] = {}
+        groups: list[SectorConstituentGroup] = []
+        missing: list[str] = []
+        updated: list[date] = []
+        for member in resolution.members:
+            try:
+                rows = ensure_constituents(
+                    repository, member, collector=self.hithink_collector,
+                )
+            except Exception as error:  # noqa: BLE001 - report one member's gap
+                rows = []
+                missing.append(
+                    f"{member.name}:constituents_unavailable:{type(error).__name__}"
+                )
+            for row in rows:
+                collected.setdefault(row["symbol"], {
+                    "symbol": row["symbol"], "name": row["name"],
+                })
+            groups.append(SectorConstituentGroup(
+                sector_name=member.name, thscode=member.thscode,
+                member_count=len(rows),
+            ))
+            stamp = repository.constituents_updated_at(member.thscode)
+            if stamp is not None:
+                updated.append(stamp.date())
+        if not collected:
+            raise ValueError(f"未获取到“{sector}”的成分股：{'；'.join(missing) or '上游未返回数据'}")
+        order_name = sort_by == "name"
+        ordered = sorted(
+            collected.values(),
+            key=lambda item: (item["name"] if order_name else item["symbol"], item["symbol"]),
+        )
+        requested_limit = max(1, min(int(limit or 500), 500))
+        returned = ordered[:requested_limit]
+        facts = SectorConstituentsFacts(
+            requested_sector=sector, sector_name=resolution.label,
+            sector_category="concept" if resolution.category == "cn_concept" else "industry",
+            group=resolution.group, thscodes=list(resolution.thscodes),
+            member_count=len(ordered), row_count=len(returned),
+            truncated=len(ordered) > len(returned),
+            data_as_of=min(updated, default=date.today()),
+            items=[SectorConstituentItem(**item) for item in returned],
+            matched_sectors=groups if resolution.group else [],
+            sources=[
+                "hithink-finance.index.constituents",
+                "postgresql.sector_constituents",
+            ],
+            data_missing=missing,
+        )
+        summary = (
+            f"{facts.sector_name}当前共{facts.member_count}只成分股"
+            + ("（分组合并去重）" if facts.group else "")
+            + ("，返回已截断。" if facts.truncated else "。")
+        )
+        return ToolResult(
+            name="sector_stocks",
+            input={
+                "sector": sector, "category": requested_category,
+                "limit": requested_limit, "sort_by": sort_by,
+            },
+            output=facts,
+            summary=summary,
+            trace_output=facts.model_dump(mode="json"),
+            result_status="partial" if facts.data_missing else "ok",
         )
 
     def hot_stock_ranking(
@@ -2057,3 +2316,55 @@ def compact_first_board_position_groups(
             )
         ],
     }
+
+
+def _sector_ranking_item(row: dict[str, Any], rank: int) -> SectorRankingItem:
+    return SectorRankingItem(
+        sector_name=row["name"],
+        rank=rank,
+        change_pct=row["change_pct"],
+        amount_yi=row.get("amount_yi"),
+        up_count=row.get("up_count"),
+        down_count=row.get("down_count"),
+        leader_name=row.get("leader_name"),
+        leader_change_pct=row.get("leader_change_pct"),
+    )
+
+
+def _sector_universe_count(
+    repository: SectorRepository, category: str, summary_only: bool,
+) -> int:
+    return len(repository.catalog(category, summary_only=summary_only))
+
+
+def _period_return(rows: list[dict[str, Any]], days: int) -> float | None:
+    if len(rows) <= days:
+        return None
+    start = rows[-days - 1].get("close")
+    end = rows[-1].get("close")
+    if not start or end is None:
+        return None
+    return round((end - start) / start * 100, 2)
+
+
+def _mean(values: list[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    return round(sum(present) / len(present), 2) if present else None
+
+
+def _sum_optional(values: list[float | None]) -> float | None:
+    present = [value for value in values if value is not None]
+    return round(sum(present), 2) if present else None
+
+
+def _sum_int(values: list[int | None]) -> int | None:
+    present = [value for value in values if value is not None]
+    return sum(present) if present else None
+
+
+def _unique(values) -> list[str]:
+    return list(dict.fromkeys(value for value in values if value))
+
+
+def _pct(value: float | None) -> str:
+    return f"{value:+.2f}%" if value is not None else "无数据"

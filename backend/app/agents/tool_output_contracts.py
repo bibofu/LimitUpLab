@@ -45,10 +45,10 @@ from app.models import (
     MarketIndexTrendFacts,
     MarketIndexTrendItem,
     ReviewAgentReportResponse,
+    SectorConstituentItem,
+    SectorConstituentsFacts,
     SectorPerformanceFacts,
     SectorRankingItem,
-    SectorStockRankingFacts,
-    SectorStockTrendItem,
     StockActivityFacts,
     StockKLineBar,
     StockKLineFacts,
@@ -79,8 +79,8 @@ TOOL_OUTPUT_SPECS: dict[str, OutputSpec] = {
     "sector_performance": OutputSpec(
         row_model=SectorRankingItem, payload_model=SectorPerformanceFacts
     ),
-    "sector_stock_ranking": OutputSpec(
-        row_model=SectorStockTrendItem, payload_model=SectorStockRankingFacts
+    "sector_stocks": OutputSpec(
+        row_model=SectorConstituentItem, payload_model=SectorConstituentsFacts
     ),
     "hot_stock_ranking": OutputSpec(
         row_model=HotStockRow, payload_model=HotStockPayload
