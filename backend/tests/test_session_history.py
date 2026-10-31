@@ -160,12 +160,12 @@ def test_summary_request_is_a_session_recap():
 def test_session_summary_lists_turns_and_gaps_without_market_values():
     summary = format_session_summary([
         {"question": "本轮市场情绪", "answer_status": "complete",
-         "stop_reason": "answered", "tools": ["market_summary"]},
+         "stop_reason": "answered", "tools": ["market_event_pool"]},
         {"question": "近5日对比", "answer_status": "partial",
          "stop_reason": "answered", "tools": ["limit_up_events"]},
     ])
     assert "本会话索引摘要" in summary
     assert "已提交轮次：2" in summary
     assert "第 2 轮" in summary
-    assert "market_summary" in summary
+    assert "market_event_pool" in summary
     assert "不含可复核的行情数值" in summary

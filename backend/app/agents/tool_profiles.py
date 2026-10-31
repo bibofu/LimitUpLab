@@ -50,19 +50,19 @@ PROFILE_TOOLS: dict[str, frozenset[str]] = {
         "dragon_tiger_list", "limit_up_events",
     }),
     "index": frozenset({
-        "market_summary", "market_index_trend", "index_search",
+        "market_index_trend", "index_search",
         "index_quote", "index_constituents",
     }),
     "limit_up": frozenset({
-        "market_summary", "limit_up_events", "market_event_pool",
+        "limit_up_events", "market_event_pool",
         "daily_board_promotion", "dragon_tiger_list", "first_board_filter",
     }),
     "sector": frozenset({
-        "market_summary", "sector_performance", "sector_stocks",
+        "sector_performance", "sector_stocks",
         "hot_stock_ranking",
     }),
     "market": frozenset({
-        "market_summary", "market_index_trend", "limit_up_events",
+        "market_index_trend", "limit_up_events",
         "market_event_pool", "sector_performance", "hot_stock_ranking",
         "daily_board_promotion", "dragon_tiger_list", "first_board_filter",
     }),
@@ -74,7 +74,8 @@ PROFILE_TOOLS: dict[str, frozenset[str]] = {
         "recent_limit_up_returns", "limit_up_events",
     }),
     "review": frozenset({
-        "review_high_score_picks", "first_board_ratings", "market_summary",
+        "trading_calendar", "market_event_pool", "limit_up_events",
+        "daily_board_promotion",
     }),
 }
 PROFILE_TOOLS["general"] = frozenset(
@@ -146,6 +147,18 @@ def resolve_tool_profile(request: Any) -> ToolProfile:
         extras.add("trading_calendar")
     if any(term in message for term in FIRST_BOARD_TERMS) and "review" not in matched:
         extras.add("first_board_ratings")
+    if "review" in matched:
+        # A review starts from the canonical market-day aggregate; focus tools
+        # are exposed only when the question actually names that dimension.
+        if any(term in message for term in SECTOR_TERMS):
+            extras.add("sector_performance")
+        if any(term in message for term in ("龙虎榜", "机构", "游资", "资金")):
+            extras.add("dragon_tiger_list")
+        if any(term in message for term in INDEX_TERMS):
+            extras.add("market_index_trend")
+        if any(term in message for term in (
+                "评分", "评级", "top10", "命中率", "表现", "回顾", "候选")):
+            extras.update({"first_board_ratings", "review_high_score_picks"})
     tools.update(extras)
 
     name = next(iter(matched)) if len(matched) == 1 else (

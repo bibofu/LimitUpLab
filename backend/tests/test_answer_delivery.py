@@ -130,7 +130,7 @@ class StreamingProvider(ScriptedProvider):
 
 def test_runner_publishes_the_final_answer_and_withdraws_a_tool_round():
     provider = StreamingProvider([
-        (["我先查询数据"], call("market_summary", {})),
+        (["我先查询数据"], call("limit_up_events", {})),
         (["最新交易日涨停", "数量已取得。"], AIMessage(content="最新交易日涨停数量已取得。")),
     ])
     events, emit = collector()

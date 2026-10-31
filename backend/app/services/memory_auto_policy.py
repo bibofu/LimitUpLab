@@ -25,7 +25,7 @@ PERSISTENCE_MARKERS = (
     "记住", "改成", "改为", "always", "default", "from now on",
 )
 SAFE_AUTO_DISPLAY_TOOLS = frozenset({
-    "trading_calendar", "market_summary", "market_index_trend",
+    "trading_calendar", "market_index_trend",
     "daily_board_promotion", "sector_performance", "sector_stocks",
     "hot_stock_ranking", "dragon_tiger_list", "finance_news", "stock_news",
     "stock_activity", "stock_profile", "first_board_ratings",

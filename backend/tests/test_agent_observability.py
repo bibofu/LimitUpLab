@@ -15,7 +15,7 @@ class AgentObservabilityTest(unittest.TestCase):
             run_type="agent_chat",
             status="success",
             intent="market_overview_query",
-            tool_calls=["llm_tool_planner", "market_summary", "llm_tool_answer"],
+            tool_calls=["llm_tool_planner", "market_event_pool", "llm_tool_answer"],
             input_json={"message": "market mood"},
             output_json={
                 "answer": "A-share limit-up count is 105.",
@@ -23,7 +23,7 @@ class AgentObservabilityTest(unittest.TestCase):
                 "warnings": ["not investment advice"],
                 "tool_results": [
                     {
-                        "name": "market_summary",
+                        "name": "market_event_pool",
                         "input": {"trade_date": "2026-08-12"},
                         "summary": "Market summary loaded.",
                         "status": "success",
@@ -43,7 +43,7 @@ class AgentObservabilityTest(unittest.TestCase):
         self.assertEqual(summary.duration_ms, 123)
         self.assertEqual(summary.warnings, ["not investment advice"])
         self.assertEqual(summary.trace_url, "https://langfuse.example/traces/trace-1")
-        self.assertEqual(summary.tool_results[0].name, "market_summary")
+        self.assertEqual(summary.tool_results[0].name, "market_event_pool")
         self.assertIn("limit-up count", summary.answer_preview or "")
 
 

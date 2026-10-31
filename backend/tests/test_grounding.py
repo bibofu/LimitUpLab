@@ -92,11 +92,12 @@ def test_non_data_clarification_is_allowed():
     assert missing_required_tool("什么是K线？", [], "complete") is False
 
 
-def test_rate_question_requires_market_summary():
+def test_rate_question_requires_market_event_pool():
     query = "2026-10-27 的开板率与炸板未回封率分别是多少？请给出分子、分母。"
-    assert required_tool_for_query(query) == "market_summary"
+    assert required_tool_for_query(query) == "market_event_pool"
     assert _result(query, answer="41/97 ≈ 42.3%").stop_reason == "tool_evidence_required"
-    assert _result(query, ["market_summary"], answer="56/69 ≈ 81.16%").status == "complete"
+    assert _result(query, ["market_event_pool"], answer="56/69 ≈ 81.16%").status == "complete"
+    assert _result(query, ["limit_up_events"], answer="56/69 ≈ 81.16%").status == "complete"
 
 
 def test_event_window_question_does_not_require_stock_kline():
@@ -142,7 +143,7 @@ def test_summary_recap_without_tools_returns_the_deterministic_index():
     state = _state(query, answer="首板35只，连板4只，涨停39只")
     state["conversation"] = {"session_ledger": [
         {"question": "本轮市场情绪", "answer_status": "complete",
-         "stop_reason": "answered", "tools": ["market_summary"]},
+         "stop_reason": "answered", "tools": ["market_event_pool"]},
         {"question": "近5日对比", "answer_status": "partial",
          "stop_reason": "answered", "tools": ["limit_up_events"]},
     ]}
@@ -159,9 +160,9 @@ def test_summary_recap_without_tools_returns_the_deterministic_index():
 def test_summary_recap_with_a_current_tool_keeps_the_answer():
     query = "请总结本次复盘中的主要风险和缺失数据"
     assert not summary_lacks_tool_evidence(
-        query, ["market_summary"], "complete", answer="涨停39只",
+        query, ["market_event_pool"], "complete", answer="涨停39只",
     )
-    result = _result(query, ["market_summary"], answer="涨停39只")
+    result = _result(query, ["market_event_pool"], answer="涨停39只")
     assert result.status == "complete"
     assert result.answer == "涨停39只"
 

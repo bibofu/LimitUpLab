@@ -1,6 +1,7 @@
 """Tool registry and schemas for the first-board Agent."""
 
 import os
+from collections import Counter
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Any
@@ -64,7 +65,6 @@ from app.repositories import (
 from app.services.analysis import (
     enrich_board_promotion_openings,
     events_for_date,
-    summarize_market,
 )
 from app.services.daily_promotion import build_daily_promotion_report
 from app.services.finance_news import collect_finance_news
@@ -108,7 +108,6 @@ EXTENDED_AGENT_PROFILE = "extended"
 V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
     {
         "trading_calendar",
-        "market_summary",
         "market_index_trend",
         "sector_performance",
         "sector_stocks",
@@ -264,59 +263,6 @@ class AgentToolRegistry:
             summary=summary,
             trace_output=trace_output,
             result_status="partial" if response.data_missing else "ok",
-        )
-
-    def market_summary(self, *, include_limit_down: bool = False) -> ToolResult:
-        """Return the latest objective local market facts."""
-
-        summary = summarize_market(self.events)
-        if include_limit_down:
-            try:
-                limit_down = collect_limit_down_pool(summary.trade_date)
-                summary = summary.model_copy(
-                    update={
-                        "limit_down_count": len(limit_down.items),
-                        "limit_down_source": limit_down.source,
-                    }
-                )
-            except Exception:  # noqa: BLE001
-                pass
-        trace_output = {
-            "trade_date": summary.trade_date.isoformat(),
-            "limit_up_count": summary.limit_up_count,
-            "first_board_count": summary.first_board_count,
-            "continued_board_count": summary.continued_board_count,
-            "touched_limit_count": summary.limit_up_count + summary.unsealed_count,
-            "intraday_opened_count": summary.failed_count,
-            "intraday_opened_rate": summary.failed_limit_up_rate,
-            "unsealed_count": summary.unsealed_count,
-            "unsealed_rate": summary.unsealed_rate,
-            "rate_basis": "intraday_opened_count / touched_limit_count; unsealed_count / touched_limit_count; ratios are 0..1",
-            "limit_down_count": summary.limit_down_count,
-            "limit_down_source": summary.limit_down_source,
-            "max_board_height": summary.max_board_height,
-            "hot_industries": summary.hot_industries[:5],
-            "hot_concepts": [{
-                "name": item.name,
-                "limit_up_count": item.limit_up_count,
-                "intraday_opened_count": item.failed_count,
-            } for item in summary.hot_concepts[:5]],
-        }
-        down_text = (
-            f"，跌停{summary.limit_down_count}只"
-            if summary.limit_down_count is not None
-            else "，跌停数据暂缺"
-        )
-        return ToolResult(
-            name="market_summary",
-            input={"include_limit_down": include_limit_down},
-            output=trace_output,
-            summary=(
-                f"{summary.trade_date.isoformat()} 涨停{summary.limit_up_count}只，"
-                f"首板{summary.first_board_count}只，连板{summary.continued_board_count}只，"
-                f"未回封{summary.unsealed_count}只{down_text}。"
-            ),
-            trace_output=trace_output,
         )
 
     def market_index_trend(
@@ -1411,6 +1357,29 @@ class AgentToolRegistry:
                 summary=summary,
             )
 
+        summary_payload = None
+        if result_mode == "summary" and effective_type == "limit_up":
+            day_events = [
+                event for event in self.events if event.trade_date == target_date
+            ]
+            scoped = filter_limit_up_events(
+                day_events,
+                board_height=None,
+                min_board_height=None,
+                market=effective_market,
+                event_status="all",
+                query=query,
+                highest_only=False,
+            )
+            summary_payload = _summarize_event_scope(scoped, target_date)
+            summary_payload.update(
+                scope="market_day_all_status",
+                scope_note=(
+                    "All touched events for the selected date, market and optional "
+                    "keyword before row-status limits."
+                ),
+            )
+
         if effective_type == "limit_down":
             snapshot = collect_limit_down_pool(target_date)
             if snapshot.trade_date != target_date:
@@ -1452,34 +1421,38 @@ class AgentToolRegistry:
             )
             matched_count = len(items)
         else:
-            status = "closed" if effective_type == "limit_up" else "failed"
-            legacy_result = self.limit_up_events(
-                trade_date=target_date,
-                market=effective_market,
-                query=query,
-                event_status=status,
-                limit=100,
-            )
-            items = [
-                {
-                    "symbol": event.symbol,
-                    "name": event.name,
-                    "event_type": effective_type,
-                    "change_pct": None,
-                    "industry": event.industry,
-                    "concept": event.concept,
-                    "board_height": event.board_height,
-                    "first_limit_time": event.first_limit_time.strftime("%H:%M"),
-                    "break_count": event.break_count,
-                    "closed_limit": event.closed_limit,
-                }
-                for event in legacy_result.output
-            ]
-            # The event list is bounded, but its metadata counts the full
-            # filtered set. Preserve that count for both count and list modes.
-            matched_count = legacy_result.trace_output["matched_count"]
+            if result_mode == "summary" and effective_type == "limit_up":
+                items = []
+                matched_count = summary_payload["closed_count"]
+            else:
+                status = "closed" if effective_type == "limit_up" else "failed"
+                legacy_result = self.limit_up_events(
+                    trade_date=target_date,
+                    market=effective_market,
+                    query=query,
+                    event_status=status,
+                    limit=100,
+                )
+                items = [
+                    {
+                        "symbol": event.symbol,
+                        "name": event.name,
+                        "event_type": effective_type,
+                        "change_pct": None,
+                        "industry": event.industry,
+                        "concept": event.concept,
+                        "board_height": event.board_height,
+                        "first_limit_time": event.first_limit_time.strftime("%H:%M"),
+                        "break_count": event.break_count,
+                        "closed_limit": event.closed_limit,
+                    }
+                    for event in legacy_result.output
+                ]
+                # The event list is bounded, but its metadata counts the full
+                # filtered set. Preserve that count for both count and list modes.
+                matched_count = legacy_result.trace_output["matched_count"]
 
-        visible_items = [] if result_mode == "count" else items[:effective_limit]
+        visible_items = [] if result_mode in {"count", "summary"} else items[:effective_limit]
         labels = {
             "limit_up": "涨停",
             "limit_down": "跌停",
@@ -1501,8 +1474,20 @@ class AgentToolRegistry:
             "source": source,
             "data_missing": data_missing,
             "calendar": _calendar_trace(calendar_facts),
+            "summary": summary_payload,
         }
-        summary = f"{target_date.isoformat()} {event_label}查询命中 {matched_count} 只。"
+        if summary_payload is not None:
+            summary = (
+                f"{target_date.isoformat()} 涨停触及 {summary_payload['touched_count']} 只，"
+                f"收盘封住 {summary_payload['closed_count']} 只，"
+                f"开板 {summary_payload['opened_count']} 只"
+                f"（{_rate_text(summary_payload['opened_rate'])}），"
+                f"未回封 {summary_payload['unsealed_count']} 只"
+                f"（{_rate_text(summary_payload['unsealed_rate'])}），"
+                f"最高 {summary_payload['max_board_height']} 板。"
+            )
+        else:
+            summary = f"{target_date.isoformat()} {event_label}查询命中 {matched_count} 只。"
         if calendar_warning:
             summary += " " + calendar_warning
         return ToolResult(
@@ -1568,6 +1553,17 @@ class AgentToolRegistry:
             else:
                 effective_status = "closed"
         effective_closed_only = effective_status == "closed"
+        # The single-day summary describes the market scope, not the row filter.
+        # Board/status/query filters below only choose the returned rows.
+        scope_events = filter_limit_up_events(
+            target_events,
+            board_height=None,
+            min_board_height=None,
+            market=effective_market,
+            event_status="all",
+            query=None,
+            highest_only=False,
+        ) if len(selected_dates) == 1 else []
         target_events = filter_limit_up_events(
             target_events,
             board_height=board_height,
@@ -1591,22 +1587,16 @@ class AgentToolRegistry:
         unique_stock_count = len({event.symbol for event in target_events})
         event_summary = None
         if len(selected_dates) == 1:
-            closed_count = sum(1 for event in target_events if event.closed_limit)
-            opened_count = sum(1 for event in target_events if event.break_count > 0)
-            unsealed_count = matched_count - closed_count
-            event_summary = {
-                "trade_date": selected_dates[0].isoformat(),
-                "touched_count": matched_count,
-                "closed_count": closed_count,
-                "opened_count": opened_count,
-                "unsealed_count": unsealed_count,
-                "opened_rate": opened_count / matched_count if matched_count else None,
-                "unsealed_rate": unsealed_count / matched_count if matched_count else None,
-                "rate_basis": (
-                    "single-day unique stock rows; opened_count / touched_count; "
-                    "unsealed_count / touched_count"
+            event_summary = _summarize_event_scope(scope_events, selected_dates[0])
+            event_summary.update(
+                filtered_count=matched_count,
+                scope="market_day_all_status",
+                scope_note=(
+                    "touched/closed/opened/unsealed and both rates are calculated on "
+                    "all touched events for the selected date and market before board, "
+                    "status and keyword filters; filtered_count is the returned row count."
                 ),
-            }
+            )
         sector_summary, unclassified_event_count = group_limit_up_events(
             target_events, group_by=group_by, limit=limit,
         )
@@ -2334,6 +2324,36 @@ _SECTOR_FULL_LIST_TERMS = (
 )
 
 
+def _summarize_event_scope(events: list[LimitUpEvent], trade_date: date) -> dict[str, Any]:
+    """One deterministic market-day summary used by the aggregate and row tools."""
+
+    touched = len(events)
+    closed = [event for event in events if event.closed_limit]
+    opened = [event for event in events if event.break_count > 0]
+    unsealed = [event for event in events if not event.closed_limit]
+    industry_counts = Counter(event.industry for event in closed)
+    return {
+        "trade_date": trade_date.isoformat(),
+        "touched_count": touched,
+        "closed_count": len(closed),
+        "opened_count": len(opened),
+        "unsealed_count": len(unsealed),
+        "opened_rate": round(len(opened) / touched, 4) if touched else None,
+        "unsealed_rate": round(len(unsealed) / touched, 4) if touched else None,
+        "first_board_count": sum(1 for event in closed if event.board_height == 1),
+        "continued_board_count": sum(1 for event in closed if event.board_height > 1),
+        "max_board_height": max((event.board_height for event in closed), default=0),
+        "top_limit_up_industries": [
+            {"name": name, "count": count}
+            for name, count in industry_counts.most_common(5)
+        ],
+        "rate_basis": (
+            "opened_count / touched_count; unsealed_count / touched_count; "
+            "ratios are 0..1"
+        ),
+    }
+
+
 def _sector_ranking_item(row: dict[str, Any], rank: int) -> SectorRankingItem:
     return SectorRankingItem(
         sector_name=row["name"],
@@ -2384,3 +2404,7 @@ def _unique(values) -> list[str]:
 
 def _pct(value: float | None) -> str:
     return f"{value:+.2f}%" if value is not None else "无数据"
+
+
+def _rate_text(value: float | None) -> str:
+    return f"{value * 100:.2f}%" if value is not None else "暂无"

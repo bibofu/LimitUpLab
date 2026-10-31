@@ -43,11 +43,18 @@ RESEARCH_TOOL_SCHEMAS = [
         time_mode="historical",
         dates=("trade_date",),
         collection="items",
-        notes="Event identities/counts; amount may be unavailable. For amount-sorted local limit-up/failed events use limit_up_events.",
+        notes=(
+            "Event identities/counts; amount may be unavailable. For amount-sorted local "
+            "limit-up/failed events use limit_up_events. result_mode=summary with "
+            "event_type=limit_up returns the canonical market-day aggregate and no rows."
+        ),
         description=(
             "查询完整交易日的市场价格限制事件，统一支持涨停、跌停和炸板名单。"
             "event_type 必须使用 limit_up、limit_down 或 broken_board；"
             "适合各种关于哪些股票涨停、跌停或炸板的口语化问法。"
+            "result_mode=summary 且 event_type=limit_up 时，返回当日市场聚合："
+            "触及/收盘封住/盘中开板/未回封及开板率、未回封率、首板数、连板数、最高板和"
+            "收盘涨停行业计数；不返回名单。跌停和炸板池的 summary 只返回数量。"
         ),
         args_schema={
             "type": "object",
@@ -74,6 +81,11 @@ RESEARCH_TOOL_SCHEMAS = [
                 "result_mode": {
                     "type": ["string", "null"],
                     "enum": ["list", "count", "summary", "ranking", None],
+                    "description": (
+                        "list/count return rows or a count; summary with limit_up returns "
+                        "the market-day aggregate (touched/closed/opened/unsealed, rates, "
+                        "first/continued/max height, top limit-up industries)."
+                    ),
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
             },
@@ -81,7 +93,9 @@ RESEARCH_TOOL_SCHEMAS = [
         },
         returns=(
             "A normalized completed-day market event pool with event_type, date, count, "
-            "stock names, symbols and available event fields."
+            "stock names, symbols and available event fields. For limit_up + summary: "
+            "touched/closed/opened/unsealed counts and rates, first-board/continued counts, "
+            "max board height and top limit-up industries with an explicit scope."
         ),
     ),
     AgentToolSchema(
@@ -89,12 +103,19 @@ RESEARCH_TOOL_SCHEMAS = [
         time_mode="historical",
         dates=("trade_date",),
         collection="events",
-        notes="Includes amount (CNY), turnover_rate (%), closed_limit. failed means not sealed at close; broken_intraday also includes resealed stocks.",
+        notes=(
+            "Includes amount (CNY), turnover_rate (%), closed_limit. failed means not sealed at close; "
+            "broken_intraday also includes resealed stocks. Single-day event_summary is the full-day "
+            "market scope before board/status/keyword filters; filtered_count is the returned row count."
+        ),
         description=(
             "查询单日或最近多个交易日的涨停事件，可按市场板块、板数、首板/连板、炸板次数、"
             "行业、题材或股票名称过滤，也可按行业或题材聚合。用户提到主板、创业板、科创板、北交所时，"
             "分别设置 market=main_board、chinext、star_market、beijing。"
             "普通涨停/首板/连板名单默认只返回收盘封住的股票；查询炸板或曾开板时使用 broken_only。"
+            "单日 event_summary 的 touched/closed/opened/unsealed 和两个比率始终是当日全市场口径，"
+            "先于板数、状态和关键词过滤；不要用过滤后的行数重算。需要只要聚合时优先用 "
+            "market_event_pool(event_type=limit_up, result_mode=summary)。"
         ),
         args_schema={
             "type": "object",

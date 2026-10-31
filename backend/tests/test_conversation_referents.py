@@ -279,7 +279,7 @@ def _market_analysis(tool, date):
 def test_multiple_analysis_scopes_with_one_date_resolve_the_date():
     refs = build_conversation_referents("run-1", response(
         "2026-10-27 市场结构",
-        [_market_analysis("market_summary", "2026-10-27"),
+        [_market_analysis("market_event_pool", "2026-10-27"),
          _market_analysis("market_event_pool", "2026-10-27")],
     ))
     assert len(refs["analyses"]) == 2
@@ -299,7 +299,7 @@ def test_multiple_analysis_scopes_with_one_date_resolve_the_date():
 def test_multiple_analysis_scopes_with_different_dates_still_clarify():
     refs = build_conversation_referents("run-1", response(
         "两日市场结构",
-        [_market_analysis("market_summary", "2026-10-27"),
+        [_market_analysis("market_event_pool", "2026-10-27"),
          _market_analysis("market_event_pool", "2026-10-24")],
     ))
     resolved = resolve_reference(

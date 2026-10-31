@@ -37,11 +37,18 @@ def test_unknown_tool_has_no_field_definitions():
 
 
 def test_market_rates_document_the_actual_denominator_and_ratio_unit():
-    definitions = field_definitions_for("market_summary")["metadata"]
-    assert "收盘涨停数加收盘未回封数" in definitions["touched_limit_count"]
-    for field in ("intraday_opened_rate", "unsealed_rate"):
-        assert "当日触及涨停总数" in definitions[field]
-        assert "0至1比例" in definitions[field]
+    from app.agents.tool_output_models import MarketDaySummary
+
+    opened = MarketDaySummary.model_fields["opened_rate"]
+    unsealed = MarketDaySummary.model_fields["unsealed_rate"]
+    assert "opened_count / touched_count" in (opened.description or "")
+    assert "unsealed_count / touched_count" in (unsealed.description or "")
+    assert "0至1比例" in (opened.json_schema_extra or {}).get("unit", "")
+
+    definitions = field_definitions_for(
+        "market_event_pool", metadata={"summary": {}},
+    )["metadata"]
+    assert "市场日聚合" in definitions["summary"]
 
 
 def test_stock_financials_documents_cumulative_and_single_quarter_bases():

@@ -37,8 +37,8 @@ def completed_run(
     response = {
         "answer": answer,
         "task_status": task_status,
-        "intent": "market_summary",
-        "tool_calls": tool_calls if tool_calls is not None else ["market_summary", "limit_up_events"],
+        "intent": "market_event_pool",
+        "tool_calls": tool_calls if tool_calls is not None else ["market_event_pool", "limit_up_events"],
         "warnings": warnings or [],
         "trace_url": f"https://trace.example/{row['run_id']}",
     }

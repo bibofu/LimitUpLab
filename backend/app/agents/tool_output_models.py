@@ -26,40 +26,6 @@ class OutputModel(BaseModel):
 # ---------------------------------------------------------------------------
 
 
-class HotConceptRow(OutputModel):
-    name: str = Field(description="概念名称")
-    limit_up_count: int = Field(description="该概念收盘涨停家数")
-    intraday_opened_count: int = Field(description="该概念盘中曾开板家数")
-
-
-class MarketSummaryPayload(OutputModel):
-    trade_date: date = Field(description="最新本地交易日")
-    limit_up_count: int = Field(description="收盘封住涨停的股票数")
-    first_board_count: int = Field(description="收盘封住的首板股票数")
-    continued_board_count: int = Field(description="收盘封住的连板股票数")
-    touched_limit_count: int = Field(description="当日触及涨停的股票总数，等于收盘涨停数加收盘未回封数；两个比例的共同分母")
-    intraday_opened_count: int = Field(description="盘中曾开板的股票数，包含最终回封和未回封股票")
-    intraday_opened_rate: float = Field(
-        description="盘中曾开板数 / 当日触及涨停总数；不是除以收盘涨停数", json_schema_extra={"unit": "0至1比例"}
-    )
-    unsealed_count: int = Field(description="收盘未回封的炸板股数")
-    unsealed_rate: float = Field(
-        description="收盘未回封数 / 当日触及涨停总数", json_schema_extra={"unit": "0至1比例"}
-    )
-    rate_basis: str = Field(description="开板率与未回封率的分子、分母及数值单位")
-    limit_down_count: int | None = Field(
-        default=None, description="跌停股数；未查询跌停池时为null"
-    )
-    limit_down_source: str | None = Field(
-        default=None, description="跌停数据来源；未查询时为null"
-    )
-    max_board_height: int = Field(description="当日最高连板高度")
-    hot_industries: list[str] = Field(description="涨停股集中的行业")
-    hot_concepts: list[HotConceptRow] = Field(
-        description="涨停概念热度，每项含name、limit_up_count、intraday_opened_count"
-    )
-
-
 class PostLimitCandidateRow(OutputModel):
     symbol: str = Field(description="股票代码")
     name: str = Field(description="股票名称")
@@ -360,6 +326,36 @@ class MarketEventRow(OutputModel):
     closed_limit: bool | None = Field(default=None, description="收盘是否封住涨停")
 
 
+class HotIndustryRow(OutputModel):
+    name: str = Field(description="行业名称")
+    count: int = Field(description="该行业收盘涨停家数")
+
+
+class MarketDaySummary(OutputModel):
+    """One deterministic, market-day aggregate for limit-up events."""
+
+    trade_date: str = Field(description="统计交易日")
+    touched_count: int = Field(description="当日触及涨停的股票数")
+    closed_count: int = Field(description="收盘封住涨停的股票数")
+    opened_count: int = Field(description="盘中曾开板数，包含最终回封")
+    unsealed_count: int = Field(description="收盘未回封数")
+    opened_rate: float | None = Field(
+        default=None, description="opened_count / touched_count", json_schema_extra={"unit": "0至1比例"}
+    )
+    unsealed_rate: float | None = Field(
+        default=None, description="unsealed_count / touched_count", json_schema_extra={"unit": "0至1比例"}
+    )
+    first_board_count: int = Field(description="收盘封住的首板数")
+    continued_board_count: int = Field(description="收盘封住的连板数")
+    max_board_height: int = Field(description="收盘封住的最高连板高度")
+    top_limit_up_industries: list[HotIndustryRow] = Field(
+        description="收盘涨停行业计数，收盘封住口径，最多5项"
+    )
+    rate_basis: str = Field(description="开板率和未回封率的分子、分母")
+    scope: str = Field(description="统计范围，例如 market_day_all_status")
+    scope_note: str = Field(description="范围说明：市场日内全部触及事件，先于行状态过滤")
+
+
 class MarketEventPoolPayload(OutputModel):
     trade_date: str = Field(description="事件交易日")
     event_type: str = Field(description="事件类型")
@@ -371,6 +367,10 @@ class MarketEventPoolPayload(OutputModel):
     matched_count: int | None = Field(default=None, description="匹配数量")
     returned_count: int = Field(description="实际返回数量")
     items: list[MarketEventRow] = Field(description="事件名单")
+    summary: MarketDaySummary | None = Field(
+        default=None,
+        description="limit_up + result_mode=summary 时的市场日聚合；其他模式为null",
+    )
     source: str = Field(description="数据来源")
     availability: str | None = Field(
         default=None, description="收盘数据不可用原因；可用时为null"

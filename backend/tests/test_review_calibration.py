@@ -70,7 +70,7 @@ def test_evaluate_cases_scores_exact_agreement():
             "answer": "涨停 69 家。",
             "context": {
                 "task_status": "complete",
-                "intent": "market_summary",
+                "intent": "market_event_pool",
                 "tool_calls": ["limit_up_events"],
                 "warnings": [],
             },

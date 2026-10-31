@@ -11,7 +11,7 @@ from app.agents.session_history import is_session_recap_query
 # narrow: it catches data questions that previously reused stale/hallucinated
 # context instead of querying the tool in this run.
 _REQUIRED_TOOL_TERMS = (
-    ("market_summary", (
+    ("market_event_pool", (
         "开板率", "炸板未回封率", "未回封率", "触板股",
     )),
     ("stock_kline", (
@@ -34,6 +34,11 @@ _DEFINITION_TERMS = ("什么是", "是什么意思", "解释一下", "怎么理�
 _SKIP_STATUSES = frozenset({"clarify", "refuse", "cancelled", "error"})
 _RATE_FOLLOWUP_TERMS = ("沿用", "刚才")
 _TOOL_MISSING_PHRASES = ("需要本轮", "没有相应工具", "工具的可核验结果", "请重新提问")
+# A rate question can be answered from the canonical aggregate or from the
+# single-day row tool when its event_summary is explicitly market-day scoped.
+_REQUIRED_TOOL_ALTERNATIVES = {
+    "market_event_pool": {"market_event_pool", "limit_up_events"},
+}
 _DATE_OR_TIME = re.compile(
     r"(20\d{2}[-年]\d{1,2}[-月]\d{1,2}日?|\b\d{1,2}:\d{2}(?::\d{2})?\b)"
 )
@@ -71,14 +76,15 @@ def missing_required_tool(query: str, tool_calls: list[str] | None, status: str 
     if status in _SKIP_STATUSES:
         return False
     required = required_tool_for_query(query)
-    if required == "market_summary" and any(
+    if required == "market_event_pool" and any(
         term in str(query or "") for term in _RATE_FOLLOWUP_TERMS
     ):
         return False
     if (answer is not None and not answered_with_data_values(answer)
             and not any(phrase in str(answer) for phrase in _TOOL_MISSING_PHRASES)):
         return False
-    return bool(required and required not in set(tool_calls or []))
+    allowed = _REQUIRED_TOOL_ALTERNATIVES.get(required, {required})
+    return bool(required and not (allowed & set(tool_calls or [])))
 
 
 def summary_lacks_tool_evidence(

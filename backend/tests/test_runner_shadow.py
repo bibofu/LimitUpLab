@@ -83,13 +83,13 @@ def request(message: str = "最新交易日涨停多少只？", *, symbol: str |
 
 def test_runner_calls_one_tool_and_returns_model_readable_result():
     provider = ScriptedProvider([
-        call("market_summary", {}),
+        call("limit_up_events", {}),
         AIMessage(content="最新交易日涨停数量已取得。"),
     ])
     result = NodeRunner(request(), registry(), provider).run_nodes()
 
     assert result.status == "answered"
-    assert result.tool_calls == ["market_summary"]
+    assert result.tool_calls == ["limit_up_events"]
     assert result.tool_count == 1
     assert result.model_rounds == 2
 
@@ -126,7 +126,7 @@ def test_runner_preserves_repeated_field_definitions_for_replayable_tool_context
 
 def test_runner_records_round_context_and_definition_cost():
     provider = MeteredProvider([
-        call("market_summary", {}),
+        call("limit_up_events", {}),
         AIMessage(content="最新交易日涨停数量已取得。"),
     ])
     with capture_llm_usage() as tracker:
@@ -155,7 +155,7 @@ def test_runner_prompt_matches_the_selected_tool_profile():
 
     assert "工具" in system
     tool_names = {item["function"]["name"] for item in provider.options[0]["tools"]}
-    assert "market_summary" in tool_names
+    assert "limit_up_events" in tool_names
     assert "stock_financials" not in tool_names
     assert "post_limit_screen" not in tool_names
 
@@ -238,7 +238,7 @@ def test_runner_withholds_candidate_when_triggered_review_fails(review):
 @pytest.mark.parametrize("review_all", [False, True])
 def test_runner_does_not_spend_an_extra_review_after_the_model_round_budget(review_all):
     provider = ScriptedProvider([
-        *(call("market_summary", {}, f"budget_{index}") for index in range(MAX_MODEL_ROUNDS - 1)),
+        *(call("limit_up_events", {}, f"budget_{index}") for index in range(MAX_MODEL_ROUNDS - 1)),
         AIMessage(content="历史研究事实。" if review_all else "不构成任何仓位建议。"),
     ])
     result = NodeRunner(request(), registry(), provider, review_all_answers=review_all).run_nodes()
@@ -297,7 +297,7 @@ def test_full_review_mode_never_publishes_a_cancelled_candidate(monkeypatch, can
 
 def test_runner_stops_at_the_model_round_budget():
     provider = ScriptedProvider([
-        call("market_summary", {}, f"call_{index}")
+        call("limit_up_events", {}, f"call_{index}")
         for index in range(MAX_MODEL_ROUNDS + 2)
     ])
     result = NodeRunner(request(), registry(), provider).run_nodes()
@@ -327,7 +327,7 @@ def test_runner_keeps_history_out_of_trusted_system_instructions():
 def test_business_definitions_exclude_runtime_control_tools():
     runner = NodeRunner(request(), registry(), ScriptedProvider([]))
     names = {item["function"]["name"] for item in runner.definitions}
-    assert "market_summary" in names
+    assert "limit_up_events" in names
     assert "finish" not in names
     assert "compute_result" not in names
     assert "read_evidence" not in names
@@ -340,7 +340,7 @@ def interrupted_answer():
 
 def test_runner_rewrites_truncated_answer_once_using_existing_evidence():
     provider = ScriptedProvider([
-        call("market_summary", {}), interrupted_answer(),
+        call("limit_up_events", {}), interrupted_answer(),
         AIMessage(content="完整的紧凑研究回答。", response_metadata={"finish_reason": "stop"}),
     ])
     result = NodeRunner(request(), registry(), provider).run_nodes()
@@ -357,10 +357,10 @@ def test_runner_rewrites_truncated_answer_once_using_existing_evidence():
 
 @pytest.mark.parametrize("repair_response", [
     interrupted_answer(), AIMessage(content=""),
-    call("market_summary", {}, "unexpected_repair_tool"),
+    call("limit_up_events", {}, "unexpected_repair_tool"),
 ])
 def test_runner_never_publishes_interrupted_answer_as_complete(repair_response):
-    provider = ScriptedProvider([call("market_summary", {}), interrupted_answer(), repair_response])
+    provider = ScriptedProvider([call("limit_up_events", {}), interrupted_answer(), repair_response])
     result = NodeRunner(request(), registry(), provider).run_nodes()
 
     assert result.status == "partial"
@@ -372,7 +372,7 @@ def test_runner_never_publishes_interrupted_answer_as_complete(repair_response):
 
 
 def test_runner_keeps_failed_repair_resumable_instead_of_publishing_partial_draft():
-    provider = ScriptedProvider([call("market_summary", {}), interrupted_answer(), RuntimeError("upstream unavailable")])
+    provider = ScriptedProvider([call("limit_up_events", {}), interrupted_answer(), RuntimeError("upstream unavailable")])
     with pytest.raises(RecoverableRunError):
         NodeRunner(request(), registry(), provider).run_nodes()
     assert len(provider.calls) == 3
@@ -388,7 +388,7 @@ def test_runner_does_not_invent_evidence_when_both_text_attempts_are_truncated()
 
 def test_runner_length_recovery_cannot_exceed_existing_round_budget():
     provider = ScriptedProvider([
-        *(call("market_summary", {}, f"call_{index}") for index in range(MAX_MODEL_ROUNDS - 1)),
+        *(call("limit_up_events", {}, f"call_{index}") for index in range(MAX_MODEL_ROUNDS - 1)),
         interrupted_answer(),
     ])
     result = NodeRunner(request(), registry(), provider).run_nodes()
@@ -398,7 +398,7 @@ def test_runner_length_recovery_cannot_exceed_existing_round_budget():
 
 
 def test_runner_does_not_execute_tool_calls_from_length_interrupted_turn():
-    truncated_call = call("market_summary", {})
+    truncated_call = call("limit_up_events", {})
     truncated_call.response_metadata["finish_reason"] = "length"
     provider = ScriptedProvider([truncated_call, interrupted_answer()])
     result = NodeRunner(request(), registry(), provider).run_nodes()

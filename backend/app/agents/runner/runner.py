@@ -29,6 +29,7 @@ from app.agents.runner.answer_delivery import AnswerDelivery
 from app.agents.runner.prompt import build_system_prompt
 from app.agents.runner.result import RunnerResult
 from app.agents.runner.tool_view import business_definitions, dump, model_result
+from app.agents.skills import resolve_agent_skill
 from app.agents.result_paging import (
     PAGE_TOKEN_BUDGET, READ_RESULT_DEFINITION, READ_RESULT_TOOL,
     ReadModelResultRequest, ResultPageError, model_observation,
@@ -122,6 +123,9 @@ class AgentRunner:
         self.reference_date = reference_date
         self.gateway.reference_date = reference_date
         self.system_prompt = build_system_prompt(reference_date)
+        skill = resolve_agent_skill(self.request)
+        if skill:
+            self.system_prompt = f"{self.system_prompt}\n\n{skill}"
 
     def enable_answer_delivery(self, emit) -> None:
         """Attach the graph's candidate-answer channel to this runner."""

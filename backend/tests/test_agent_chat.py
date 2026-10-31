@@ -79,7 +79,7 @@ class AgentChatTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Cannot resolve stock identity"):
             registry.stock_kline("不存在股票")
 
-    def test_market_summary_exposes_unambiguous_opened_and_unsealed_metrics(self) -> None:
+    def test_market_event_pool_summary_exposes_market_day_rates_and_structure(self) -> None:
         closed_after_open = self._make_event("000001", "甲", "行业", "题材").model_copy(
             update={"break_count": 1}
         )
@@ -90,17 +90,32 @@ class AgentChatTest(unittest.TestCase):
 
         result = AgentToolRegistry(
             events=[closed_after_open, stable, unsealed]
-        ).market_summary()
+        )
+        aggregate = result.market_event_pool(
+            event_type="limit_up", result_mode="summary",
+        ).output["summary"]
+        default_rows = result.limit_up_events(limit=10).trace_output["event_summary"]
+        all_rows = result.limit_up_events(event_status="all", limit=10).trace_output["event_summary"]
 
-        self.assertEqual(result.output["intraday_opened_count"], 2)
-        self.assertEqual(result.output["limit_up_count"], 2)
-        self.assertEqual(result.output["touched_limit_count"], 3)
-        self.assertEqual(result.output["intraday_opened_rate"], round(2 / 3, 4))
-        self.assertEqual(result.output["unsealed_count"], 1)
-        self.assertEqual(result.output["unsealed_rate"], round(1 / 3, 4))
-        self.assertIn("touched_limit_count", result.output["rate_basis"])
-        self.assertNotIn("failed_count", result.output)
-        self.assertNotIn("failed_limit_up_rate", result.output)
+        self.assertEqual(default_rows["touched_count"], aggregate["touched_count"])
+        self.assertEqual(default_rows["opened_count"], aggregate["opened_count"])
+        self.assertEqual(default_rows["unsealed_count"], aggregate["unsealed_count"])
+        self.assertEqual(default_rows["filtered_count"], aggregate["closed_count"])
+        self.assertEqual(all_rows["touched_count"], aggregate["touched_count"])
+        self.assertEqual(all_rows["filtered_count"], aggregate["touched_count"])
+
+        summary = aggregate
+        self.assertEqual(summary["opened_count"], 2)
+        self.assertEqual(summary["closed_count"], 2)
+        self.assertEqual(summary["touched_count"], 3)
+        self.assertEqual(summary["opened_rate"], round(2 / 3, 4))
+        self.assertEqual(summary["unsealed_count"], 1)
+        self.assertEqual(summary["unsealed_rate"], round(1 / 3, 4))
+        self.assertEqual(summary["first_board_count"], 2)
+        self.assertEqual(summary["continued_board_count"], 0)
+        self.assertEqual(summary["max_board_height"], 1)
+        self.assertIn("opened_count / touched_count", summary["rate_basis"])
+        self.assertNotIn("failed_count", summary)
 
 
 if __name__ == "__main__":

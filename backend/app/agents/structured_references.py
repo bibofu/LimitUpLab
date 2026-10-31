@@ -21,7 +21,7 @@ SINGLE_STOCK_TOOLS = frozenset({
 })
 # Tools whose rows are statistical summaries rather than stock lists.
 ANALYSIS_TOOLS = frozenset({
-    "daily_board_promotion", "market_summary", "sector_performance",
+    "daily_board_promotion", "sector_performance",
     "hot_stock_ranking", "dragon_tiger_list",
     "recent_limit_up_returns", "post_limit_statistics", "market_event_pool",
     "stock_kline", "market_index_trend",

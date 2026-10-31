@@ -24,7 +24,6 @@ from app.agents.tool_output_models import (
     LimitUpEventsPayload,
     MarketEventPoolPayload,
     MarketEventRow,
-    MarketSummaryPayload,
     PostLimitCandidateRow,
     PostLimitPathPayload,
     PostLimitPathRow,
@@ -71,7 +70,6 @@ class OutputSpec:
 
 TOOL_OUTPUT_SPECS: dict[str, OutputSpec] = {
     "trading_calendar": OutputSpec(payload_model=MarketCalendarFacts),
-    "market_summary": OutputSpec(payload_model=MarketSummaryPayload),
     "market_index_trend": OutputSpec(
         row_model=MarketIndexTrendItem, payload_model=MarketIndexTrendFacts
     ),

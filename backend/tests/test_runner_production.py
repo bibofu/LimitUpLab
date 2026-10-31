@@ -70,15 +70,15 @@ def test_public_entry_runs_durable_graph(monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_AGENT_COMPLIANCE", "deterministic")
     provider = ScriptedProvider([
         input_review(),
-        call("market_summary", {}),
+        call("limit_up_events", {}),
         AIMessage(content="最新交易日涨停数量已取得。"),
     ])
     response = ask(provider, monkeypatch)
 
     assert response.generated_by == "agent-runner-v1"
     assert response.task_status == "complete"
-    assert response.tool_calls == ["market_summary"]
-    assert response.tool_results[0].name == "market_summary"
+    assert response.tool_calls == ["limit_up_events"]
+    assert response.tool_results[0].name == "limit_up_events"
     assert response.tool_results[0].result.status == "ok"
 
 
@@ -201,11 +201,11 @@ def test_public_entry_allows_research_with_trading_terms_when_semantic_review_al
 ])
 def test_ranked_historical_research_can_reach_business_tools(monkeypatch, message):
     provider = ScriptedProvider([
-        input_review(), call("market_summary", {}), AIMessage(content="已取得历史研究事实。"),
+        input_review(), call("limit_up_events", {}), AIMessage(content="已取得历史研究事实。"),
     ])
     response = ask(provider, monkeypatch, message)
     assert response.task_status == "complete"
-    assert response.tool_calls == ["market_summary"]
+    assert response.tool_calls == ["limit_up_events"]
     assert len(provider.calls) == 3
 
 
@@ -213,11 +213,11 @@ def test_ranked_historical_research_can_reach_business_tools(monkeypatch, messag
 def test_inferred_trading_intent_requires_review_repair_before_research_is_blocked(monkeypatch, quote):
     provider = ScriptedProvider([
         input_review(decision="refuse", signals=("trading_advice",), trading_action_quote=quote),
-        input_review(), call("market_summary", {}), AIMessage(content="可做客观排名与风险研究。"),
+        input_review(), call("limit_up_events", {}), AIMessage(content="可做客观排名与风险研究。"),
     ])
     response = ask(provider, monkeypatch, "按历史评分排序，结合行情和新闻解释高分样本的风险。")
     assert response.task_status == "complete"
-    assert response.tool_calls == ["market_summary"]
+    assert response.tool_calls == ["limit_up_events"]
     assert "validation_errors" in provider.calls[1][-1].content
     assert len(provider.calls) == 4
 

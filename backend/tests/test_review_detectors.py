@@ -24,14 +24,14 @@ def snapshot(
     task_status: str = "complete",
     tool_calls: list[str] | None = None,
     warnings: list[str] | None = None,
-    intent: str = "market_summary",
+    intent: str = "market_event_pool",
     token_complete: bool = True,
     tool_evidence: list[dict] | None = None,
 ) -> RunSnapshot:
     evidence = {
         "task_status": task_status,
         "intent": intent,
-        "tool_calls": tool_calls if tool_calls is not None else ["market_summary"],
+        "tool_calls": tool_calls if tool_calls is not None else ["market_event_pool"],
         "warnings": warnings or [],
         "tool_result_count": 1,
         "token_usage_complete": token_complete,
@@ -105,7 +105,7 @@ def judge_json(fail_dimension: str | None = None, refs: list[str] | None = None)
 def test_deterministic_checks_pass_grounded_answer():
     report = run_deterministic_checks(snapshot(
         "市场最高标是测试股份（000001），收盘 10.20 元，涨幅 10%。",
-        tool_calls=["market_summary"],
+        tool_calls=["market_event_pool"],
     ))
     assert report.overall == "pass"
     assert {item.check for item in report.checks} >= {"delivery_status", "tool_evidence"}
@@ -162,14 +162,14 @@ def test_judge_payload_includes_bounded_tool_excerpts():
     run_judge(
         provider,
         snapshot("最高标为测试股份。", tool_evidence=[{
-            "tool": "market_summary",
+            "tool": "market_event_pool",
             "status": "success",
             "excerpt": "最高标=测试股份 000678，5 连板",
             "truncated": False,
         }]),
     )
     assert "最高标=测试股份 000678" in provider.prompt
-    assert "market_summary" in provider.prompt
+    assert "market_event_pool" in provider.prompt
 
 
 def test_judge_rejects_invented_or_missing_evidence():

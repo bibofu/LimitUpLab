@@ -55,7 +55,7 @@ def test_profile_resolution_uses_symbol_page_and_vocabulary():
 
     limit_up = resolve_tool_profile(_request("2026-10-28 涨停家数是多少"))
     assert limit_up.name.startswith("limit_up")
-    assert {"market_summary", "limit_up_events", "trading_calendar"} <= limit_up.tools
+    assert {"market_event_pool", "limit_up_events", "trading_calendar"} <= limit_up.tools
 
     index = resolve_tool_profile(_request("上证指数最近5日走势"))
     assert index.name == "index"
@@ -71,12 +71,23 @@ def test_profile_resolution_uses_symbol_page_and_vocabulary():
     assert "post_limit_screen" in post_limit.tools
 
     review = resolve_tool_profile(_request("复盘 Top10 表现"))
-    assert review.name == "review"
+    assert review.name.startswith("review")
     assert "review_high_score_picks" in review.tools
+
+    review_base = resolve_tool_profile(_request("复盘今天"))
+    assert review_base.name.startswith("review")
+    assert {"trading_calendar", "market_event_pool", "limit_up_events",
+            "daily_board_promotion"} <= review_base.tools
+    assert "market_summary" not in review_base.tools
+
+    review_sector = resolve_tool_profile(_request("复盘今天板块轮动"))
+    assert "sector_performance" in review_sector.tools
+    review_dragon = resolve_tool_profile(_request("复盘今天龙虎榜"))
+    assert "dragon_tiger_list" in review_dragon.tools
 
     general = resolve_tool_profile(_request("帮我看看"))
     assert general.name == "general"
-    assert {"market_summary", "finance_news", "stock_profile"} <= general.tools
+    assert {"market_event_pool", "finance_news", "stock_profile"} <= general.tools
 
     combined = resolve_tool_profile(_request("600519 最新新闻和财务"))
     assert combined.name.startswith("combined:")

@@ -25,26 +25,6 @@ MARKET_TOOL_SCHEMAS = [
         ),
     ),
     AgentToolSchema(
-        name="market_summary",
-        time_mode="latest_local",
-        notes="Only the latest local market date; not historical.",
-        description=(
-            "读取本地最新涨停数量、首板数量、未回封数量、最高连板和热门行业等客观市场数据；"
-            "市场环境综述可按需补充真实跌停池数量。"
-        ),
-        args_schema={
-            "type": "object",
-            "properties": {
-                "include_limit_down": {
-                    "type": "boolean",
-                    "description": "Fetch the completed limit-down pool for a broad market review.",
-                }
-            },
-            "required": [],
-        },
-        returns="Objective market facts for the latest local trade date.",
-    ),
-    AgentToolSchema(
         name="market_index_trend",
         time_mode="historical",
         dates=("end_date",),
