@@ -197,10 +197,12 @@ class AgentToolRegistry:
         hithink_collector: HithinkFinanceCollector | None = None,
         profile: str | None = None,
         sector_repository: SectorRepository | None = None,
+        request: Any | None = None,
     ):
         """Create a registry bound to current request data dependencies."""
 
         self.events = events
+        self.request = request
         self.first_board_repository = first_board_repository or FirstBoardRepository()
         self.hithink_collector = hithink_collector or HithinkFinanceCollector()
         self.sector_repository = sector_repository or SectorRepository(
@@ -681,7 +683,7 @@ class AgentToolRegistry:
         self,
         sector: str,
         category: str | None = None,
-        limit: int = 500,
+        limit: int = 20,
         sort_by: str | None = "symbol",
     ) -> ToolResult:
         """List current constituents for one board or a same-level group."""
@@ -728,7 +730,12 @@ class AgentToolRegistry:
             collected.values(),
             key=lambda item: (item["name"] if order_name else item["symbol"], item["symbol"]),
         )
-        requested_limit = max(1, min(int(limit or 500), 500))
+        user_text = str(getattr(self.request, "message", "") or "")
+        full_requested = any(term in user_text for term in _SECTOR_FULL_LIST_TERMS)
+        if full_requested:
+            requested_limit = 500
+        else:
+            requested_limit = max(1, min(int(limit or 20), 20))
         returned = ordered[:requested_limit]
         facts = SectorConstituentsFacts(
             requested_sector=sector, sector_name=resolution.label,
@@ -2320,6 +2327,11 @@ def compact_first_board_position_groups(
             )
         ],
     }
+
+
+_SECTOR_FULL_LIST_TERMS = (
+    "全部", "所有", "完整名单", "全量", "全名单", "都列", "一一列", "逐只", "全列",
+)
 
 
 def _sector_ranking_item(row: dict[str, Any], rank: int) -> SectorRankingItem:

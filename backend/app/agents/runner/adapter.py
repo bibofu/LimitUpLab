@@ -85,6 +85,7 @@ def answer_with_runner(
     registry = tool_registry or AgentToolRegistry(
         events=events,
         first_board_repository=repository,
+        request=request,
     )
 
     if progress_callback:

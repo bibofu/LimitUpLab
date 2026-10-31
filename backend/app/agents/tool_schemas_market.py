@@ -161,6 +161,8 @@ MARKET_TOOL_SCHEMAS = [
         description=(
             "按板块名列出当前成分股代码和名称。行业和概念都支持；"
             "汽车、军工等宽泛名称会把同层级子板块合并为一个分组并按代码去重。"
+            "默认只返回20只；只有用户原话明确说“全部/所有/完整名单”时才设置 limit=500，其他情况不要设置大 limit。"
+            "truncated=true 时必须说明还有成员未返回。"
             "用于回答“汽车板块有哪些股票”“半导体板块包含哪些公司”；"
             "不提供涨跌排序，需要板块走势或排行时用 sector_performance。"
         ),
@@ -180,7 +182,7 @@ MARKET_TOOL_SCHEMAS = [
                     "type": "integer",
                     "minimum": 1,
                     "maximum": 500,
-                    "description": "Maximum rows to return; default 500. truncated=true when reduced.",
+                    "description": "Maximum rows to return; default 20, max 500. truncated=true when reduced.",
                 },
                 "sort_by": {
                     "type": ["string", "null"],

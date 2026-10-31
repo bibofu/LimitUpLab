@@ -115,10 +115,11 @@ def _history_rows(code, *, days=30, source="test-history"):
     ]
 
 
-def _registry(repo):
+def _registry(repo, message: str = ""):
     return AgentToolRegistry(
         events=[], first_board_repository=SimpleNamespace(database_url=None),
         hithink_collector=ExplodingCollector(), sector_repository=repo,
+        request=SimpleNamespace(message=message),
     )
 
 
@@ -177,6 +178,55 @@ def test_group_returns_member_breakdown_and_equal_weight_average():
     ]
     assert output.change_pct == -3.0
     assert len(output.matched_sectors) == 3
+
+
+def test_sector_stocks_defaults_to_twenty_and_marks_truncation():
+    members = [
+        {"symbol": f"{index:06d}", "name": f"股票{index}"}
+        for index in range(1, 26)
+    ]
+    repo = FakeSectorRepository(
+        catalog=_catalog(), constituents={"881121.TI": members},
+    )
+    result = _registry(repo).sector_stocks(sector="半导体")
+    output = result.output
+    assert output.member_count == 25
+    assert output.row_count == 20
+    assert output.truncated is True
+
+
+def test_sector_stocks_caps_a_model_limit_without_an_explicit_full_request():
+    members = [
+        {"symbol": f"{index:06d}", "name": f"股票{index}"}
+        for index in range(1, 26)
+    ]
+    repo = FakeSectorRepository(
+        catalog=_catalog(), constituents={"881121.TI": members},
+    )
+    result = _registry(repo, "汽车板块有哪些股票").sector_stocks(
+        sector="半导体", limit=500,
+    )
+    output = result.output
+    assert output.member_count == 25
+    assert output.row_count == 20
+    assert output.truncated is True
+
+
+def test_sector_stocks_honors_all_when_the_user_asks_for_every_member():
+    members = [
+        {"symbol": f"{index:06d}", "name": f"股票{index}"}
+        for index in range(1, 26)
+    ]
+    repo = FakeSectorRepository(
+        catalog=_catalog(), constituents={"881121.TI": members},
+    )
+    result = _registry(repo, "汽车板块全部股票列出来").sector_stocks(
+        sector="半导体", limit=20,
+    )
+    output = result.output
+    assert output.member_count == 25
+    assert output.row_count == 25
+    assert output.truncated is False
 
 
 def test_sector_stocks_lists_a_group_without_truncation():

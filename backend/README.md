@@ -122,7 +122,8 @@ tools; every invocation is checked by `ToolGateway`.
   Tonghuashun industry summary; the 390-concept ranking comes from the batched
   Tonghuashun CLI snapshot; named-sector history is backfilled once per board.
 - `sector_stocks` lists current constituents for one board or a same-level group
-  (汽车, 军工) from the cached Tonghuashun index directory.
+  (汽车, 军工) from the cached Tonghuashun index directory. It returns 20 rows
+  by default; set `limit=500` when the user explicitly asks for every member.
 - `python -m scripts.sync_sector_data --date YYYY-MM-DD` refreshes the sector
   catalog and daily ranking; the after-close loop runs it automatically.
 
