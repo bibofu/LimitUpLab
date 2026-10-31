@@ -1,5 +1,12 @@
 # Agent 问答回归记录
 
+## 2026-10-31：板块工具全市场排行 30 秒仍不完整，成分股只返回前 10
+
+- 原表现：`sector_performance(sector=None)` 对 320 个行业指数逐个拉日线，共享限速 1 次/秒，30 秒预算下只覆盖 27/320，返回 `partial` 且没有前 5/后 5；指定板块冷启动 5.6 秒。`sector_stock_ranking` 只返回前 10/20 只，无法回答“汽车板块有哪些股票”。
+- 原因：全市场排行采用 N+1 指数历史调用，叠加 1 秒共享限速和 30 秒预算；没有本地缓存；成分股工具只做趋势排名，不做完整名单。
+- 修复：新增 `sector_catalog`、`sector_daily`、`sector_constituents` 三张表；收盘后同步 90 行业排行（AkShare 同花顺摘要，0.18–0.24 秒）、390 概念排行（同花顺 CLI 4 批快照，4.35 秒）；行业走势按需用 AkShare 同花顺行业历史（0.5 秒），概念/细分行业用 CLI（约 1 秒）；成分股按需 CLI（0.3–1 秒）并缓存 7 天；新增 `sector_stocks` 列出全部成分股（上限 500），移除 `sector_stock_ranking`；`sector_performance` 支持行业/概念、汽车/军工分组明细 + 等权平均、分组/缺口显式化；`without_proxy()` 补充 `NO_PROXY=*`，避免 Windows 系统代理劫持采集请求。
+- 验证：新工具热查询 13–34 毫秒（行业榜 18ms、概念榜 13ms、汽车分组 34ms）；冷启动行业历史 0.54 秒、概念历史 0.40 秒、汽车成分股 2.04 秒（之后缓存）。真实三问：①“汽车板块有哪些股票” → `sector_stocks`，`complete`，326 只全量（17.5 秒主要耗在模型输出全部名称，已流式展示）；②“汽车板块最近走势怎么样” → `sector_performance`，`complete`，三子板块明细 + 等权平均 -2.94%（7.6 秒）；③“今天哪些板块表现较好” → `trading_calendar` + `sector_performance`，`complete`，90/90 覆盖，前 5 为白酒/医疗服务/港口航运等（7.95 秒），并正确说明 2026-10-31 非交易日、采用 2026-10-30。后端全量 2194 passed、3 skipped、22 subtests passed。
+
 ## 2026-10-30：明确股票名称被当成歧义回指，要求提供代码或序号
 
 - 原表现：`run_fead64a06de74bccaced500da0b7a0a5`（“简单介绍一下青岛食品”）返回 `clarify/reference_ambiguous`，`tool_calls=[]`，回答“请明确所指股票的代码或在上一份名单中的序号。”。同一会话上一轮刚返回 47 只收盘涨停名单，其中包含青岛食品（001219）；checkpoint 中记录 `reference_intent={"kind":"entities","quote":"青岛食品"}`。

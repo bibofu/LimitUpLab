@@ -256,12 +256,22 @@ flowchart LR
 | 工具类别 | 代表工具 | 使用场景 |
 | --- | --- | --- |
 | 市场与事件 | `trading_calendar`、`market_summary`、`market_event_pool`、`limit_up_events`、`daily_board_promotion` | 收盘日判定、概览、名单、数量、事件条件和晋级 |
-| 行业与人气 | `sector_performance`、`sector_stock_ranking`、`hot_stock_ranking` | 板块及股票横向观察 |
+| 行业与人气 | `sector_performance`、`sector_stocks`、`hot_stock_ranking` | 板块行情、成分股与横向观察 |
 | 个股与资讯 | `stock_kline`、`stock_news`、`stock_activity`、`dragon_tiger_list` | 个股走势、近期事件与来源资讯 |
 | 评级与复盘 | `first_board_ratings`、`review_high_score_picks` | 解释评分并追踪高分候选结果 |
 | 形态研究 | `post_limit_screen`、`post_limit_path`、`post_limit_statistics` | 形态筛选、历史路径和样本统计 |
 
 完整名称和参数以注册表为准，工具名称不等于数据供应商名称；两个不同工具也可能共享同一个上游来源，不能据此声称独立交叉验证。
+
+### 板块工具的数据边界
+
+`sector_performance` 和 `sector_stocks` 不做请求内全量采集：
+
+- 全市场行业榜读取 PostgreSQL `sector_daily`，口径是 90 个同花顺行业；概念榜是 390 个同花顺概念。收盘任务用同花顺行业摘要（约 0.2 秒）和批量概念快照（约 4.35 秒）写入。
+- 单板块走势先读本地日线；不足时只补该板块一次（行业用 AkShare 同花顺行业历史约 0.5 秒，概念/细分行业用同花顺 CLI 约 1 秒）。
+- 成分股来自同花顺 CLI，按板块缓存 7 天；`sector_stocks` 返回当前全部成分股（上限 500），汽车/军工按同层级子板块合并去重。
+- 数据缺失、请求日未同步、成分股缓存刷新日期和排名覆盖数都显式返回；不用任一行业抽样或旧日期替代目标日。
+- 东方财富 `push2` 行情接口在高频请求下会限流断连，只作为可选兜底，不进入主链路。
 
 ### Gateway 的确定性检查
 

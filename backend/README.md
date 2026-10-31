@@ -117,8 +117,14 @@ tools; every invocation is checked by `ToolGateway`.
 
 - `market_index_trend` fetches date-aligned 2-20 trading-day performance for
   the Shanghai Composite, Shenzhen Component and ChiNext Index.
-- `sector_performance` fetches industry-sector ranking, change, breadth,
-  turnover, fund flow, leader and recent trend through AKShare providers.
+- `sector_performance` answers whole-market board ranking and one board's trend
+  from the local `sector_daily` cache. The 90-industry ranking is synced from the
+  Tonghuashun industry summary; the 390-concept ranking comes from the batched
+  Tonghuashun CLI snapshot; named-sector history is backfilled once per board.
+- `sector_stocks` lists current constituents for one board or a same-level group
+  (汽车, 军工) from the cached Tonghuashun index directory.
+- `python -m scripts.sync_sector_data --date YYYY-MM-DD` refreshes the sector
+  catalog and daily ranking; the after-close loop runs it automatically.
 
 If your network requires a local proxy, set `LIMITUPLAB_PROXY_URL` in `.env`.
 The backend will apply it to `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` when
