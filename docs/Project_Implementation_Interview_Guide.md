@@ -251,11 +251,11 @@ flowchart LR
 
 这里的“唯一来源”指同一工具只有一份契约定义，并不要求所有定义堆在一个文件。按领域拆分后，注册表保留原顺序和对象引用，现有调用方的导入路径不变；修改某个工具仍只需修改所属领域的一份契约。这也是面试中解释重构取舍的具体例子。
 
-`v1_close_review` 默认暴露 24 个业务工具（不含财报），`extended` 暴露全部 25 个。系统提示中的财务和指数规则按当前 profile 实际开放的工具生成，不再写死未开放的工具名。此外有 4 个运行时控制工具，不能与业务工具混计。
+当前注册 25 个业务工具；`v1_close_review` 与 `extended` 当前暴露同一套工具，两者差异由 profile 配置而非工具目录决定。系统提示中的财务和指数规则按当前 profile 实际开放的工具生成，不再写死未开放的工具名。此外有 4 个运行时控制工具，不能与业务工具混计。
 
 | 工具类别 | 代表工具 | 使用场景 |
 | --- | --- | --- |
-| 市场与事件 | `trading_calendar`、`market_summary`、`market_event_pool`、`limit_up_events`、`daily_board_promotion` | 收盘日判定、概览、名单、数量、事件条件和晋级 |
+| 市场与事件 | `trading_calendar`、`market_event_pool`、`limit_up_events`、`daily_board_promotion` | 收盘日判定、当日聚合、名单、数量、事件条件和晋级 |
 | 行业与人气 | `sector_performance`、`sector_stocks`、`hot_stock_ranking` | 板块行情、成分股与横向观察 |
 | 个股与资讯 | `stock_kline`、`stock_news`、`stock_activity`、`dragon_tiger_list` | 个股走势、近期事件与来源资讯 |
 | 评级与复盘 | `first_board_ratings`、`review_high_score_picks` | 解释评分并追踪高分候选结果 |
@@ -272,6 +272,17 @@ flowchart LR
 - 成分股来自同花顺 CLI，按板块缓存 7 天；`sector_stocks` 默认返回 20 只，用户明确要求全部时最多 500 只，`truncated=true` 表示还有成员未返回；汽车/军工按同层级子板块合并去重。
 - 数据缺失、请求日未同步、成分股缓存刷新日期和排名覆盖数都显式返回；不用任一行业抽样或旧日期替代目标日。
 - 东方财富 `push2` 行情接口在高频请求下会限流断连，只作为可选兜底，不进入主链路。
+
+### 每日复盘 skill
+
+`app/agents/skills/daily_review.py` 提供产品内的稳定 playbook；`AgentRunner` 按用户原话命中“复盘/收盘总结/今天市场/市场情绪”等词时追加到 system prompt。skill 不提供数据，只规定编排：
+
+- 先调用 `market_event_pool(event_type=limit_up, result_mode=summary)` 取当日聚合；
+- 用户未指定重点时给紧凑默认复盘（情绪、首板/连板、晋级、数据缺口）；
+- 用户关注板块、龙虎榜、指数或评分时，只加载并展开对应工具；
+- 禁止用事件行重算比率，不输出交易指令。
+
+`review` profile 只内置日历、当日聚合、涨停事件和晋级四个基础工具；板块、龙虎榜、指数和评分工具按关键词作为 extras 暴露，避免 schema 膨胀。
 
 ### Gateway 的确定性检查
 
