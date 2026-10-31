@@ -555,6 +555,10 @@ class AgentToolRegistry:
                 member_missing.append("daily_metrics_unavailable")
             if not history:
                 member_missing.append("history_unavailable")
+            elif history[-1]["trade_date"] != data_as_of:
+                member_missing.append(
+                    f"history_through_{history[-1]['trade_date'].isoformat()}"
+                )
             members.append(SectorPerformanceMember(
                 sector_name=member.name, thscode=member.thscode,
                 change_pct=row["change_pct"] if row else (
