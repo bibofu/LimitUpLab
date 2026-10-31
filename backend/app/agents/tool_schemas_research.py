@@ -45,23 +45,27 @@ RESEARCH_TOOL_SCHEMAS = [
         collection="items",
         notes=(
             "Event identities/counts; amount may be unavailable. For amount-sorted local "
-            "limit-up/failed events use limit_up_events. result_mode=summary with "
-            "event_type=limit_up returns the canonical market-day aggregate and no rows."
+            "limit-up/unsealed/intraday-broken events use limit_up_events. unsealed and "
+            "intraday_broken are different sets: unsealed excludes resealed stocks, "
+            "intraday_broken includes them. result_mode=summary with event_type=limit_up "
+            "returns the canonical market-day aggregate and no rows."
         ),
         description=(
-            "查询完整交易日的市场价格限制事件，统一支持涨停、跌停和炸板名单。"
-            "event_type 必须使用 limit_up、limit_down 或 broken_board；"
-            "适合各种关于哪些股票涨停、跌停或炸板的口语化问法。"
+            "查询完整交易日的市场价格限制事件，统一支持涨停、跌停、炸板未回封和盘中开板名单。"
+            "event_type=limit_up 为收盘封住；limit_down 为跌停；"
+            "unsealed 为触及涨停但收盘未封住（炸板未回封，不含回封股）；"
+            "intraday_broken 为盘中至少开板一次（含重新封住的股票）。"
+            "两者不是同一批股票，用户只说“炸板”且未区分口径时必须先说明差异或在回答中写明。"
             "result_mode=summary 且 event_type=limit_up 时，返回当日市场聚合："
             "触及/收盘封住/盘中开板/未回封及开板率、未回封率、首板数、连板数、最高板和"
-            "收盘涨停行业计数；不返回名单。跌停和炸板池的 summary 只返回数量。"
+            "收盘涨停行业计数；不返回名单。limit_down、unsealed 和 intraday_broken 的 summary 只返回数量。"
         ),
         args_schema={
             "type": "object",
             "properties": {
                 "event_type": {
                     "type": "string",
-                    "enum": ["limit_up", "limit_down", "broken_board"],
+                    "enum": ["limit_up", "limit_down", "unsealed", "intraday_broken"],
                 },
                 "trade_date": {
                     "type": ["string", "null"],
@@ -104,15 +108,17 @@ RESEARCH_TOOL_SCHEMAS = [
         dates=("trade_date",),
         collection="events",
         notes=(
-            "Includes amount (CNY), turnover_rate (%), closed_limit. failed means not sealed at close; "
-            "broken_intraday also includes resealed stocks. Single-day event_summary is the full-day "
-            "market scope before board/status/keyword filters; filtered_count is the returned row count."
+            "Includes amount (CNY), turnover_rate (%), closed_limit. unsealed means not sealed at close; "
+            "intraday_broken means opened at least once and also includes resealed stocks. "
+            "Single-day event_summary is the full-day market scope before board/status/keyword filters; "
+            "filtered_count is the returned row count."
         ),
         description=(
             "查询单日或最近多个交易日的涨停事件，可按市场板块、板数、首板/连板、炸板次数、"
             "行业、题材或股票名称过滤，也可按行业或题材聚合。用户提到主板、创业板、科创板、北交所时，"
             "分别设置 market=main_board、chinext、star_market、beijing。"
-            "普通涨停/首板/连板名单默认只返回收盘封住的股票；查询炸板或曾开板时使用 broken_only。"
+            "普通涨停/首板/连板名单默认只返回收盘封住的股票；查询炸板未回封用 event_status=unsealed，"
+            "查询盘中曾开板（含回封）用 event_status=intraday_broken。"
             "单日 event_summary 的 touched/closed/opened/unsealed 和两个比率始终是当日全市场口径，"
             "先于板数、状态和关键词过滤；不要用过滤后的行数重算。需要只要聚合时优先用 "
             "market_event_pool(event_type=limit_up, result_mode=summary)。"
@@ -151,20 +157,13 @@ RESEARCH_TOOL_SCHEMAS = [
                     "type": ["string", "null"],
                     "description": "Optional industry, concept, stock name or symbol keyword.",
                 },
-                "broken_only": {
-                    "type": ["boolean", "null"],
-                    "description": "Only return stocks with intraday breaks when true.",
-                },
-                "closed_only": {
-                    "type": ["boolean", "null"],
-                    "description": "Only return stocks that closed at limit-up when true.",
-                },
                 "event_status": {
                     "type": ["string", "null"],
-                    "enum": ["closed", "failed", "broken_intraday", "all", None],
+                    "enum": ["closed", "unsealed", "intraday_broken", "all", None],
                     "description": (
-                        "closed=closed limit-up, failed=did not close at limit-up, "
-                        "broken_intraday=opened at least once, all=no status filter."
+                        "closed=收盘封住；unsealed=触板但收盘未封住（炸板未回封，不含回封股）；"
+                        "intraday_broken=盘中至少开板一次（含回封）；all=不按状态过滤。"
+                        "默认closed。"
                     ),
                 },
                 "recent_trade_days": {

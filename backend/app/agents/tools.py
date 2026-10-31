@@ -150,6 +150,15 @@ _AVAILABILITY_LABELS = {
     "non_trading_day": "该日期不是交易日",
 }
 
+# One event-type -> status mapping shared by the pool and row tools. "炸板" is
+# split into two explicit states: unsealed (not resealed) and intraday_broken
+# (opened at least once, including resealed stocks).
+_EVENT_TYPE_STATUS = {
+    "limit_up": "closed",
+    "unsealed": "unsealed",
+    "intraday_broken": "intraday_broken",
+}
+
 
 def _calendar_trace(facts: MarketCalendarFacts | None) -> dict[str, Any] | None:
     """Keep the event-pool availability decision traceable without full payload."""
@@ -1425,7 +1434,7 @@ class AgentToolRegistry:
                 items = []
                 matched_count = summary_payload["closed_count"]
             else:
-                status = "closed" if effective_type == "limit_up" else "failed"
+                status = _EVENT_TYPE_STATUS[effective_type]
                 legacy_result = self.limit_up_events(
                     trade_date=target_date,
                     market=effective_market,
@@ -1456,7 +1465,8 @@ class AgentToolRegistry:
         labels = {
             "limit_up": "涨停",
             "limit_down": "跌停",
-            "broken_board": "炸板未回封",
+            "unsealed": "炸板未回封",
+            "intraday_broken": "盘中开板（含回封）",
         }
         event_label = labels[effective_type]
         data_missing = [calendar_warning] if calendar_warning else []
@@ -1514,8 +1524,6 @@ class AgentToolRegistry:
         highest_only: bool = False,
         market: str | None = None,
         query: str | None = None,
-        broken_only: bool | None = None,
-        closed_only: bool | None = None,
         event_status: str | None = None,
         recent_trade_days: int = 1,
         group_by: str | None = None,
@@ -1546,13 +1554,9 @@ class AgentToolRegistry:
         effective_market = normalize_market_segment(market)
         effective_status = normalize_event_status(event_status)
         if effective_status is None:
-            if broken_only:
-                effective_status = "broken_intraday"
-            elif closed_only is False:
-                effective_status = "all"
-            else:
-                effective_status = "closed"
-        effective_closed_only = effective_status == "closed"
+            if event_status is not None:
+                raise ValueError(f"Unsupported event status: {event_status}")
+            effective_status = "closed"
         # The single-day summary describes the market scope, not the row filter.
         # Board/status/query filters below only choose the returned rows.
         scope_events = filter_limit_up_events(
@@ -1658,8 +1662,6 @@ class AgentToolRegistry:
                 "highest_only": highest_only,
                 "market": effective_market,
                 "query": query,
-                "broken_only": broken_only,
-                "closed_only": effective_closed_only,
                 "event_status": effective_status,
                 "recent_trade_days": effective_recent_days,
                 "group_by": group_by,

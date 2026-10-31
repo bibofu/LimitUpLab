@@ -86,8 +86,8 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 | `dragon_tiger_list` | 查询同花顺龙虎榜、机构与游资净买额 |
 | `first_board_ratings` | 查询首板评级、拆解和风险 |
 | `first_board_filter` | 按行业、题材、评级和置信度筛选 |
-| `market_event_pool` | 统一查询完整交易日涨停、跌停和炸板名单或数量；`limit_up + summary` 返回当日市场聚合（触及/封住/开板/未回封、开板率、首板/连板/最高板、涨停行业计数） |
-| `limit_up_events` | 查询首板、连板、炸板及题材相关涨停事件 |
+| `market_event_pool` | 统一查询完整交易日涨停、跌停、炸板未回封（unsealed）和盘中开板（intraday_broken）名单或数量；`limit_up + summary` 返回当日市场聚合（触及/封住/开板/未回封、开板率、首板/连板/最高板、涨停行业计数） |
+| `limit_up_events` | 查询首板、连板、炸板未回封/盘中开板及题材相关涨停事件；`event_status` 明确区分 `unsealed` 与 `intraday_broken` |
 | `daily_board_promotion` | 统计近 5 日总晋级率、首板到二板率、连板梯队及成功股票明细 |
 | `stock_kline` | 查询个股近期 K 线和衍生指标 |
 | `stock_financials` | 查询个股利润表、资产负债表、现金流量表，区分年初至今累计与单季推算口径 |
@@ -98,6 +98,8 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 | `stock_news` | 查询指定股票近 1 至 30 天的结构化个股资讯，保留来源、时间和链接 |
 | `stock_activity` | 汇总指定股票的收盘走势、近期涨停记录、评分补充事实和个股资讯 |
 | `review_high_score_picks` | 追踪每日评分 Top10 后续走势，并对比同期全部首板的1进2成功率 |
+
+事件状态口径：`unsealed` 指触及涨停但收盘未封住（炸板未回封，不含回封股）；`intraday_broken` 指盘中至少开板一次（含重新封住的股票）。两者不是同一批股票，用户只说“炸板”时回答必须写明采用的口径。
 
 复盘问题由内置 `daily-review` skill（标准 `SKILL.md` 目录，`app/agents/skills/daily-review/SKILL.md`）编排：先取 `market_event_pool` 的当日聚合，再按用户关注点加载首板/晋级、板块、龙虎榜、指数或评分工具；默认给紧凑摘要，不套固定模板，也不输出交易指令。
 

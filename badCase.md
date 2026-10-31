@@ -423,3 +423,16 @@
 - 实际恢复：正常 worker 租约流程补刷后，16:38:31 快照为 complete，33/33 有行情、33/33 有财报、warnings 为空；浏览器确认推荐页面显示新快照且原警告消失。最初本地验收辅助脚本漏加 Windows multiprocessing 主入口保护导致日历超时，修正辅助脚本后重跑成功；未绕过交易日历或伪造目标日期。
 - 实际 Agent：K 线、当前交易日历、涨停/炸板解释三问均交付并持久化 completed。K 线沿用现有缓存时仍显式标记成交额/涨跌幅缺失和日历未核验的 partial，不宣称旧数据缺口也被本次修复。
 - 运行状态：后端与后台刷新服务已加载修复；已启动的独立日更任务保留运行，在下一轮进程中使用共享限速。原始回答、报告与截图保存在本地忽略目录，未提交。
+
+## 2026-11-01：Agent 工具“炸板”口径拆分（unsealed / intraday_broken）
+
+- 原表现：`market_event_pool(event_type=broken_board)` 与 `limit_up_events(broken_only=True)` 都叫“炸板”，但前者只返回收盘未回封（`closed_limit=false`，31 只），后者返回盘中至少开板一次（`break_count>0`，含回封，52 只）。用户只问“炸板多少只”时，两个入口给出不同数量，参数名无法表达差异。
+- 根因：公共词汇表把两个不同集合共用一个 `broken_board` / `broken_only` 名称；`failed` 与 `broken_intraday` 只在内部存在，未作为明确选项暴露给模型。
+- 修复：工具契约统一为四个状态 `closed` / `unsealed` / `intraday_broken` / `all` 和四个事件类型 `limit_up` / `limit_down` / `unsealed` / `intraday_broken`；删除与 `event_status` 重叠的 `broken_only`、`closed_only` 布尔参数；`market_event_pool` 由 `event_type` 直接映射状态；旧词（`failed`、`broken_board`、`broken_intraday` 等）只保留在归一化层作为迁移别名，模型可见枚举不再包含歧义项。评分理由中的“市场炸板率”按实际 `break_count>0` 口径改为“市场开板率”，行业快照中的“炸板”改为“炸板未回封”。
+- 回归：全量后端 2204 passed、3 skipped、22 subtests；新增工具层用例覆盖 `unsealed` / `intraday_broken` 拆分、旧别名迁移和 `market_event_pool` 两个新事件类型。
+- 实际 Agent 验证（2026-10-30 本地 PostgreSQL：收盘封住 47、未回封 31、盘中开板 52、触及 78）：
+  - “炸板未回封的股票有多少只？”→ completed，31 只，工具 `market_event_pool`。
+  - “盘中开板（含回封）的股票有多少只？”→ completed，52 只，并主动说明与未回封口径不同。
+  - “涨停家数、开板率和未回封率分别是多少？”→ completed，47 只；开板率 52/78=66.67%；未回封率 31/78=39.74%。
+  - 新会话只问“炸板的股票有多少只？”→ completed，同时给出 31（unsealed）与 52（intraday_broken），未二选一混淆。
+- 限制：评分与市场摘要模型字段仍名为 `failed_count` / `failed_limit_up_rate`，语义已经是开板口径；本次只修正用户可见文案，未做字段或数据库重命名。

@@ -357,7 +357,7 @@ def _score_sector_and_relay(
     score = 0.0
     evidence = [
         f"行业首板 {enrichment.industry_first_board_count} 只、连板 "
-        f"{enrichment.industry_continued_board_count} 只、炸板 {enrichment.industry_failed_count} 只"
+        f"{enrichment.industry_continued_board_count} 只、炸板未回封 {enrichment.industry_failed_count} 只"
     ]
     if enrichment.industry_first_board_count >= 3:
         score += 2
@@ -681,14 +681,16 @@ def _score_market_context(failed_rate: float, max_board_height: int) -> ScoreBre
     score = 8
     evidence: list[str] = []
 
+    # The stored rate counts break_count > 0, i.e. stocks that opened at least
+    # once (including resealed), so it is an opening rate, not the unsealed rate.
     if failed_rate >= 0.55:
         score -= 5
-        evidence.append(f"市场炸板率 {failed_rate:.0%}，接力环境偏弱")
+        evidence.append(f"市场开板率 {failed_rate:.0%}，接力环境偏弱")
     elif failed_rate >= 0.35:
         score -= 2
-        evidence.append(f"市场炸板率 {failed_rate:.0%}，分歧偏高")
+        evidence.append(f"市场开板率 {failed_rate:.0%}，分歧偏高")
     else:
-        evidence.append(f"市场炸板率 {failed_rate:.0%}，封板环境较稳定")
+        evidence.append(f"市场开板率 {failed_rate:.0%}，封板环境较稳定")
 
     if max_board_height >= 4:
         score += 2
@@ -786,7 +788,7 @@ def _build_risks(facts: FirstBoardCandidateFacts) -> list[str]:
     elif facts.turnover_rate < 1:
         risks.append("换手率偏低")
     if facts.market_failed_limit_up_rate >= 0.55:
-        risks.append("当日市场炸板率偏高")
+        risks.append("当日市场开板率偏高")
     if facts.same_industry_limit_up_count <= 1:
         risks.append("同行业扩散不足")
     enrichment = facts.enrichment

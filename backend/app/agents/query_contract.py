@@ -15,8 +15,10 @@ def current_query_reference_date() -> date:
 
 
 MarketSegment = Literal["main_board", "chinext", "star_market", "beijing"]
-EventStatus = Literal["closed", "failed", "broken_intraday", "all"]
-MarketEventType = Literal["limit_up", "limit_down", "broken_board"]
+EventStatus = Literal["closed", "unsealed", "intraday_broken", "all"]
+MarketEventType = Literal[
+    "limit_up", "limit_down", "unsealed", "intraday_broken"
+]
 SortField = Literal[
     "symbol",
     "board_height",
@@ -46,16 +48,25 @@ _MARKET_SEGMENT_ALIASES = {
     "star": "star_market", "star_market": "star_market", "科创板": "star_market",
     "beijing": "beijing", "北交所": "beijing", "北证": "beijing",
 }
+# "炸板" alone is ambiguous: it can mean "touched but did not close at the
+# limit" (unsealed) or "opened at least once" (intraday_broken, including
+# resealed). Migrate the legacy words to explicit states instead of keeping
+# one overloaded token.
 _STATUS_ALIASES: dict[str, EventStatus] = {
-    "closed": "closed", "封板": "closed",
-    "failed": "failed", "broken": "failed", "炸板": "failed",
-    "broken_intraday": "broken_intraday", "opened": "broken_intraday", "开板": "broken_intraday",
+    "closed": "closed", "sealed": "closed", "封板": "closed", "收盘封住": "closed",
+    "unsealed": "unsealed", "failed": "unsealed", "broken": "unsealed",
+    "炸板": "unsealed", "未回封": "unsealed", "炸板未回封": "unsealed",
+    "intraday_broken": "intraday_broken", "broken_intraday": "intraday_broken",
+    "opened": "intraday_broken", "开板": "intraday_broken", "曾开板": "intraday_broken",
     "all": "all", "全部": "all",
 }
 _MARKET_EVENT_TYPE_ALIASES: dict[str, MarketEventType] = {
     "limit_up": "limit_up", "up_limit": "limit_up", "涨停": "limit_up",
     "limit_down": "limit_down", "down_limit": "limit_down", "跌停": "limit_down",
-    "broken_board": "broken_board", "failed_limit_up": "broken_board", "炸板": "broken_board",
+    "unsealed": "unsealed", "broken_board": "unsealed", "failed_limit_up": "unsealed",
+    "failed": "unsealed", "炸板": "unsealed", "未回封": "unsealed",
+    "intraday_broken": "intraday_broken", "broken_intraday": "intraday_broken",
+    "opened": "intraday_broken", "开板": "intraday_broken",
 }
 _SORT_ALIASES: dict[str, SortField] = {
     "symbol": "symbol", "code": "symbol", "股票代码": "symbol", "代码": "symbol",

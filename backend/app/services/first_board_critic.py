@@ -102,9 +102,9 @@ def _build_counter_evidence(
     if facts.amount > 8_000_000_000:
         evidence.append(f"成交额 {facts.amount / 100_000_000:.1f} 亿，资金消耗偏大。")
     if facts.market_failed_limit_up_rate >= 0.55:
-        evidence.append(f"市场炸板率 {facts.market_failed_limit_up_rate:.0%}，接力环境偏弱。")
+        evidence.append(f"市场开板率 {facts.market_failed_limit_up_rate:.0%}，接力环境偏弱。")
     elif facts.market_failed_limit_up_rate >= 0.35:
-        evidence.append(f"市场炸板率 {facts.market_failed_limit_up_rate:.0%}，分歧偏高。")
+        evidence.append(f"市场开板率 {facts.market_failed_limit_up_rate:.0%}，分歧偏高。")
     if facts.same_industry_limit_up_count <= 1:
         evidence.append("同业涨停扩散不足，题材合力需要谨慎确认。")
 

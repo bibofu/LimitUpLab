@@ -26,9 +26,11 @@ def filter_limit_up_events(
     if market is not None:
         prefixes = MARKET_SEGMENT_PREFIXES[market]
         events = [event for event in events if event.symbol.startswith(prefixes)]
-    if event_status == "failed":
+    if event_status == "unsealed":
+        # Touched the limit but did not close there. Resealed stocks are closed.
         events = [event for event in events if not event.closed_limit]
-    elif event_status == "broken_intraday":
+    elif event_status == "intraday_broken":
+        # Opened at least once during the session, including stocks that resealed.
         events = [event for event in events if event.break_count > 0]
     elif event_status == "closed":
         events = [event for event in events if event.closed_limit]

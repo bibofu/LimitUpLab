@@ -88,18 +88,47 @@ def test_highest_board_is_selected_after_market_status_and_text_filters():
 
 @pytest.mark.parametrize("arguments,expected,status", [
     ({}, ["600001", "600002"], "closed"),
-    ({"broken_only": True}, ["600002", "600003"], "broken_intraday"),
-    ({"closed_only": False}, ["600001", "600002", "600003"], "all"),
-    ({"event_status": "failed", "broken_only": True}, ["600003"], "failed"),
-    ({"event_status": "closed", "closed_only": False}, ["600001", "600002"], "closed"),
+    ({"event_status": "intraday_broken"}, ["600002", "600003"], "intraday_broken"),
+    ({"event_status": "unsealed"}, ["600003"], "unsealed"),
+    ({"event_status": "all"}, ["600001", "600002", "600003"], "all"),
+    # Legacy tokens keep their old meaning while callers migrate.
+    ({"event_status": "failed"}, ["600003"], "unsealed"),
+    ({"event_status": "broken_intraday"}, ["600002", "600003"], "intraday_broken"),
 ])
-def test_explicit_status_precedes_legacy_flags(arguments, expected, status):
+def test_event_status_splits_unsealed_from_intraday_broken(arguments, expected, status):
     result = registry([
         event("600001"), event("600002", break_count=2),
         event("600003", break_count=1, closed_limit=False),
     ]).limit_up_events(trade_date=NEXT, **arguments)
     assert [row.symbol for row in result.output] == expected
     assert result.input["event_status"] == status
+
+
+def test_market_event_pool_exposes_both_broken_definitions():
+    pooled = registry([
+        event("600001"),
+        event("600002", break_count=2),
+        event("600003", break_count=1, closed_limit=False),
+    ])
+    unsealed = pooled.market_event_pool(event_type="unsealed", trade_date=NEXT)
+    opened = pooled.market_event_pool(event_type="intraday_broken", trade_date=NEXT)
+
+    assert unsealed.trace_output["matched_count"] == 1
+    assert [row["symbol"] for row in unsealed.trace_output["items"]] == ["600003"]
+    assert unsealed.trace_output["event_label"] == "炸板未回封"
+    assert opened.trace_output["matched_count"] == 2
+    assert {row["symbol"] for row in opened.trace_output["items"]} == {"600002", "600003"}
+    assert opened.trace_output["event_label"] == "盘中开板（含回封）"
+
+
+def test_legacy_broken_board_event_type_maps_to_unsealed():
+    result = registry([
+        event("600002", break_count=2),
+        event("600003", break_count=1, closed_limit=False),
+    ]).market_event_pool(event_type="broken_board", trade_date=NEXT)
+
+    assert result.trace_output["event_type"] == "unsealed"
+    assert [row["symbol"] for row in result.trace_output["items"]] == ["600003"]
 
 
 @pytest.mark.parametrize("order,expected", [

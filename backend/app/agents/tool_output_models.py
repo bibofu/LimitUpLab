@@ -296,7 +296,12 @@ class LimitUpEventsPayload(OutputModel):
     group_by: str | None = Field(default=None, description="聚合维度")
     market: str | None = Field(default=None, description="市场板块")
     market_label: str | None = Field(default=None, description="市场板块中文名")
-    event_status: str = Field(description="事件状态过滤")
+    event_status: str = Field(
+        description=(
+            "事件状态过滤：closed收盘封住、unsealed炸板未回封、"
+            "intraday_broken盘中开板（含回封）、all不过滤"
+        )
+    )
     highest_only: bool = Field(description="是否只保留最高板")
     sort_by: str = Field(description="排序字段")
     sort_order: str = Field(description="排序方向")
@@ -313,7 +318,12 @@ class LimitUpEventsPayload(OutputModel):
 class MarketEventRow(OutputModel):
     symbol: str = Field(description="股票代码")
     name: str = Field(description="股票名称")
-    event_type: str = Field(description="事件类型：limit_up、limit_down或broken_board")
+    event_type: str = Field(
+        description=(
+            "事件类型：limit_up涨停、limit_down跌停、unsealed炸板未回封、"
+            "intraday_broken盘中开板（含回封）"
+        )
+    )
     change_pct: float | None = Field(
         default=None, description="来源涨跌幅；数据未提供时为null",
         json_schema_extra={"unit": "%"},
