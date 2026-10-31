@@ -21,11 +21,17 @@ def without_proxy() -> Iterator[None]:
             "http_proxy",
             "https_proxy",
             "all_proxy",
+            "NO_PROXY",
+            "no_proxy",
         )
         previous = {name: os.environ.get(name) for name in proxy_names}
         try:
             for name in proxy_names:
                 os.environ.pop(name, None)
+            # requests also reads the Windows registry proxy through urllib.
+            # NO_PROXY=* is the only cross-platform way to force a direct call.
+            os.environ["NO_PROXY"] = "*"
+            os.environ["no_proxy"] = "*"
             yield
         finally:
             for name, value in previous.items():
