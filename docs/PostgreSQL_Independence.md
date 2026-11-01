@@ -1,6 +1,6 @@
 # PostgreSQL 功能独立性验收
 
-> 架构更新（2026-10-24）：Golden/quality 评测代码已删除；本文中的评测、质量工单和相关接口记录为历史存档，不代表当前代码。当前生产仅保留轻量 Runner 与业务/研究接口。
+> 历史记录：本文保留 2026-10-19 的 PostgreSQL 独立性验收证据。旧 Golden/quality 代码已于 2026-10-24 删除；评测、质量工单和兼容入口的描述不代表当前实现。当前 Agent 架构见 [Runtime 与 Memory 重构说明](Memory_Runtime_Refactoring.md)，数据库操作见 [本地手册](../deploy/local-postgresql.md)。
 
 日期：2026-10-19。目标是所有现行业务、研究、维护和评测功能都可以使用 PostgreSQL，不依赖遗留 SQLite 文件。原文件和归档未删除；SQLite 兼容实现、历史迁移读取及兼容回归保留，不要求删除 Python 的 `sqlite3` 模块。
 
@@ -44,7 +44,7 @@
 
 真实模型执行 `s01_main_first` 一次，完成合成场景问答、5 次模型调用；存储为独立 PostgreSQL schema，SQLite 文件数为 0，确定性检查没有失败。该次 `--judge none`，未评估的裁判项维持 `review`，不把基础设施验证写成新的 Golden 通过率。原件为 `output/golden/postgresql-no-sqlite-20261019/`。
 
-使用方法和存储保留边界见 [Golden 评测说明](Agent_Golden_Evaluation.md)。其他环境须单独创建评测库并配置 URL，不能照搬本地凭据。
+使用方法和存储保留边界见 [Golden 评测说明](https://github.com/bibofu/LimitUpLab/blob/3f3214b17d659b28b1214ff1396e924a2e7d6b9e/docs/Agent_Golden_Evaluation.md)。其他环境须单独创建评测库并配置 URL，不能照搬本地凭据。
 
 ## 文件保留与运维边界
 

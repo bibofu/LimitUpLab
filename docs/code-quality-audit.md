@@ -2,6 +2,15 @@
 
 > 架构更新（2026-10-24）：本文为历史审计记录。旧 `react_runtime`、EvidenceStore、`finish`、`compute_result` 和 Golden/quality 评测代码已删除；当前架构见 [LangChain 集成](LangChain_Integration.md)。
 
+## 2026-11-01：output、tmp 与 docs 二次整理
+
+- 核对目录用途、SHA-256、文档及脚本引用、可达 Git blob、进程引用和 PostgreSQL 控制信息。清理 54 个本地目标、4,099 个文件、1,881.40 MiB；逐文件清单与保留路径映射位于忽略目录 `output/cleanup-review-20261101/`。
+- 大体积清理限于正常关闭的迁移演练集群、与 `.local/postgresql/pgsql` 全部 1,533 个文件相同的程序副本及安装压缩包。迁移源哈希、已验证 dump 的 SHA-256 和原有逐表恢复报告均核对通过，源归档、备份、报告及服务日志保留。`output/ci-postgresql/` 仍有未正常关闭的控制状态，本次保留整个目录。
+- 去除 9 份相同 run 副本、重复截图和记录、可从 Git 恢复的源码副本、过时的一次性源码转换脚本、图标预览中间产物与空目录。Agent 两批索引和首轮独有记录保留；共享 run 有哈希映射，历史比较脚本按映射读取，不混合不同实验结果。
+- 删除已被现行手册及验收记录替代的迁移计划，将前置演练证据索引并入本地切换记录；删除 4 个旧图标 SVG，正式 favicon 和方案对比图保留。新增 [文档与资料索引](README.md)，明确当前入口与历史记录；纠正研究说明中的旧 SQLite 表述及历史页的当前状态措辞。
+- 将 28 处原有失效文档/源码链接改为 25 个经 `git cat-file` 核实存在的固定历史提交目标，保留旧版本的证据语义；这不是对当前实现的重新验收。
+- 验证：939 份保留研究、验证和归档资料 SHA-256 不变，原有 7 个 Run trace 本地文件不变；首轮 10 个、复验 9 个历史 run 均可完整复算，拦截报告写入后执行，原报告未覆盖；本地 Markdown 文件链接与 `git diff --check` 通过。本轮仅整理资料及其本地历史复算脚本，没有修改生产业务或 Agent 执行代码。
+
 ## 2026-11-01：本地临时文件与无引用代码清理
 
 - 核对 Git 跟踪状态、Python AST、前端 TypeScript 标识符引用以及工具注册与框架回调。保留动态调用、跨模块重导出和仍在使用的仓储接口。
@@ -20,7 +29,7 @@
 - 校准完整保留v20的50/61和v21的 **52/61**，均未超过v19的53/61。v21恢复四个旧不匹配项，却新增五个退化；原目标题恢复三项，品牌来源仍误判。引用错误下降不能替代语义准确率，整体改善门槛未通过。
 - 另固定上一完整轮全部5个review回合，3通过、2待复核；其中m04仅首轮，不称5个完整场景。s26未使用已有closed证据；r05来源身份仍误归world_fact，新闻完备性判定也有语义风险。两批答案不同，成绩不合并。
 - 新增27项回归与BC-142至BC-145，950项Golden相关pytest通过；未重复前端构建。源码提交366feb4、8c81fd6分别383行和26行增删。四批合计360次Judge调用、0次Agent调用、4,207,286 tokens，原生/Schema协议异常与补审调用均0，仍有claim引用错误。
-- 未运行新的完整Golden，最新完整Agent成绩仍为v19的56通过/5待复核。详情、失败迭代和哈希见[Judge v21固定验证](Agent_Golden_Judge_v21_Validation.md)。未修改生产Agent或部署。
+- 未运行新的完整Golden，最新完整Agent成绩仍为v19的56通过/5待复核。详情、失败迭代和哈希见[Judge v21固定验证](https://github.com/bibofu/LimitUpLab/blob/403a7024ec9f57a888b2da274d75409ba3473cec/docs/Agent_Golden_Judge_v21_Validation.md)。未修改生产Agent或部署。
 
 ## 2026-10-12：Judge v19 补审、引用目录与可追溯上下文
 
@@ -29,7 +38,7 @@
 - 新完整轮 **56 pass / 0 fail / 5 review**；原九项恢复六项，剩s25/s26/r05，新增m04/r09。原s13/s18/r02/r03/r10均通过，全部v34、无Agent原生协议错误或fallback；Judge原生/Schema协议错误0，但仍有五条维度引用错误，包括一个未知ref_id。
 - v8校准输入与266标签保持，**55/61→53/61题、261/266→258/266判项匹配**。退化包含品牌来源括号、交付范围、旧日限定及partial未知；未全量人工签核，不能宣称可靠性通过。三批补审均未触发，该分支由HTTP失败注入验证。
 - 新增122项回归。完整离线后端2,173及22子测试、前端94与构建通过；最后五项来源链边界后923项Golden相关测试全部通过。代码/既有测试/BadCase提交ec4af55为800行，新增测试54417de为690行，均低于1,000行。
-- 三批运行冻结54417de，共703次调用、8,898,667 tokens，usage完整；固定重评Judge tokens增加约38.46%，不宣称降本。详情、原句和指纹见[Judge v19完整报告](Agent_Golden_Judge_v19_Repair.md)。未修改生产Agent、真实数据或部署。
+- 三批运行冻结54417de，共703次调用、8,898,667 tokens，usage完整；固定重评Judge tokens增加约38.46%，不宣称降本。详情、原句和指纹见[Judge v19完整报告](https://github.com/bibofu/LimitUpLab/blob/fda3303c278f1110607fb031016ce8a310096815/docs/Agent_Golden_Judge_v19_Repair.md)。未修改生产Agent、真实数据或部署。
 
 ## 2026-10-12：Judge v18 协议、引用类型与固定输出重评
 
@@ -39,7 +48,7 @@
 - 完整61场景/84回合为 **52 pass / 0 fail / 9 review**，五项核心Agent场景均通过。旧基线50/3/8同时涉及生产v33→v34与Judge v17→v18，不能做单因素归因；保留5项pass→review。m20出现单次合法调用遗漏source/safety，1次调用受协议影响，不能以整体阶段失败0宣称协议异常清零。
 - 独立v8裁判诊断保持61题/266判项原标签，本轮55匹配/2不匹配/4待复核，261/266有效判项匹配。错日期/对象、来源血缘及混合引用仍未解决，未获全量人工签核。
 - 新增104项回归及BC-134至BC-137；最后一项锁定新发现缺失维度不得自动通过，未宣称模型遗漏已修复。最终离线验收 **2,056 passed、22 subtests passed，前端94/94及生产构建通过**，原件 `output/validation/20261012T054437Z-7ec2b45e/`。Windows报告文件锁已用真实读句柄复现并加入有界原子rename重试，永久拒绝仍停止且不重复模型调用。
-- 四次源码/测试提交单笔均低于1,000行；三批真实运行共636次调用、6,381,404 tokens，完整usage与指纹保持。详细残余问题、可比性与复现见 [Judge v18报告](Agent_Golden_Judge_v18_Repair.md)。生产Agent未改，未部署，历史成绩不回填。
+- 四次源码/测试提交单笔均低于1,000行；三批真实运行共636次调用、6,381,404 tokens，完整usage与指纹保持。详细残余问题、可比性与复现见 [Judge v18报告](https://github.com/bibofu/LimitUpLab/blob/af0cb0c056fe6261d8cfae0167616d2f5c477515/docs/Agent_Golden_Judge_v18_Repair.md)。生产Agent未改，未部署，历史成绩不回填。
 
 ## 2026-10-12：r02 / s13 / r10 协议、数量与异常收尾
 
@@ -48,7 +57,7 @@
 - 累计模型失败触发 `provider_error` 后，仅对唯一可用当前数据、明确展示字段、无待澄清输入且没有 `row_selection` 的任务尝试受限交表；证据和合规门禁、取消与 deadline 检查均保留。恢复仍为 `partial / provider_error`，单独记录运行时 trace，不伪造模型完成。
 - 代码提交 `b91df45` 共672行增删。新增48项回归；完整离线验收 **1,952 passed、22 subtests passed，前端94/94及生产构建通过**。原件为 `output/validation/20261012T040332Z-851f2196/`。
 - 九场景各三次、每批27 trials/30回合，同配置结果 **20 pass / 4 fail / 3 review → 22 pass / 0 fail / 5 review**。s13 **0/3 → 3/3**，r10 **2/3 → 3/3**；Agent 协议异常调用 **3 → 0**。r02和s14各出现一项 pass→review，分别为引用类型争议和 Judge 协议错误；自动比较保留退化项。
-- 五项待复核保留原判，不宣称整体质量验收通过。本轮真实模型未触发协议反馈或运行时恢复，其行为由离线失败注入覆盖。题目、oracle、fixture 和 Judge 未改；未重跑整套61场景、未部署。详情见 [修复前后对比](Agent_Golden_Results_20261012_protocol_topn_recovery.md)。
+- 五项待复核保留原判，不宣称整体质量验收通过。本轮真实模型未触发协议反馈或运行时恢复，其行为由离线失败注入覆盖。题目、oracle、fixture 和 Judge 未改；未重跑整套61场景、未部署。详情见 [修复前后对比](https://github.com/bibofu/LimitUpLab/blob/25b6c977461c32afbd857e7f0c2178c747cf28d5/docs/Agent_Golden_Results_20261012_protocol_topn_recovery.md)。
 
 ## 2026-10-12：s18 / r03 修复与真实模型复验
 
@@ -56,7 +65,7 @@
 - 同一运行后续相同参数的确定失败可复用；工具显式返回 partial 时可补查，独立任务及有依据的备用来源仍可继续。取消、执行未知和持久化异常不构造确定失败证据。首轮真实复验暴露的 trace 原载荷不一致已修正，并直接使用既有 Golden 检查器回归。
 - 代码提交 `fecd89e`（538 行增删）和 `3d49778`（64 行增删）均不超过 1,000 行。新增31个回归项；完整离线验收后端 **1,904 passed、22 subtests passed**，前端 **94/94**，TypeScript/Vite 构建通过，原件为 `output/validation/20261012T031638Z-0bcc6796/`。
 - 同配置六场景各三次的真实模型复验：s18 **2/3 → 3/3** 通过；r03 三次均由 `error / validation_failed` 变为 `partial / answered`，每次工具调用 **6 → 2**。自动成绩整体为 **13 pass / 1 fail / 4 review → 5 pass / 2 fail / 11 review**，不能宣称整体回归通过。r02 协议异常和 Judge 引用判定冲突均保留。
-- 完整 Golden **61场景、84回合全部完成，50 pass / 3 fail / 8 review**，无 harness error。s13 数量超出、r10 协议异常后的交付缺失仍待修复；m08 存在裁判对交集的语义误判，原 fail 保留。诊断结果、验收边界及复现命令见 [s18 / r03 修复与对比](Agent_Golden_Results_20261012_s18_r03.md)。题目、oracle、fixture 和 Judge 未修改；生成原件只留本地，未部署。
+- 完整 Golden **61场景、84回合全部完成，50 pass / 3 fail / 8 review**，无 harness error。s13 数量超出、r10 协议异常后的交付缺失仍待修复；m08 存在裁判对交集的语义误判，原 fail 保留。诊断结果、验收边界及复现命令见 [s18 / r03 修复与对比](https://github.com/bibofu/LimitUpLab/blob/7f666adb0152dc7c1fdab32af01468317a86e1b5/docs/Agent_Golden_Results_20261012_s18_r03.md)。题目、oracle、fixture 和 Judge 未修改；生成原件只留本地，未部署。
 
 ## 2026-10-10：冗余代码二次清理
 
@@ -150,7 +159,7 @@
 
 `v1.5.0` 代码基线为 `ce36c1b`，运行版本为 `react-runtime-v31` / `agent-tools-v2` / `react-evidence-v4`。当前工作、验证范围和优先级见 [V1.5 里程碑](V1.5_Milestone.md)；下方审查记录保留各自日期和版本，不将历史问题或测试数量覆盖为当前结论。
 
-本阶段建立独立 Golden 粗评：61 场景、84 回合；最近完整 Agent 基线仍使用 Judge v16，结果为 52 通过、1 失败、8 待复核。Judge v17 两轮专项复验改善了标签匹配与引用用途，但可靠性和全量人工签核仍未通过。下一步先修复 Agent 的额外名单和全来源失败收尾，再用固定用例复验，详见 [v17 复验记录](Agent_Golden_Judge_v17_Repair.md)。
+本阶段建立独立 Golden 粗评：61 场景、84 回合；最近完整 Agent 基线仍使用 Judge v16，结果为 52 通过、1 失败、8 待复核。Judge v17 两轮专项复验改善了标签匹配与引用用途，但可靠性和全量人工签核仍未通过。下一步先修复 Agent 的额外名单和全来源失败收尾，再用固定用例复验，详见 [v17 复验记录](https://github.com/bibofu/LimitUpLab/blob/ce36c1be0dd41408fe76666b096d2363b30406d6/docs/Agent_Golden_Judge_v17_Repair.md)。
 
 ## 2026-09-26：当前实现与文档维护索引
 
