@@ -436,3 +436,13 @@
   - “涨停家数、开板率和未回封率分别是多少？”→ completed，47 只；开板率 52/78=66.67%；未回封率 31/78=39.74%。
   - 新会话只问“炸板的股票有多少只？”→ completed，同时给出 31（unsealed）与 52（intraday_broken），未二选一混淆。
 - 限制：评分与市场摘要模型字段仍名为 `failed_count` / `failed_limit_up_rate`，语义已经是开板口径；本次只修正用户可见文案，未做字段或数据库重命名。
+
+## 2026-11-01：conditions 回指误填 date_override，输入审核失败后整轮卡在中断
+
+- 原表现：同一会话 Q1 正常完成；Q2“把刚才那38只首板股按股票代码升序列出前5只…沿用2026年10月30日的数据”提交后停在 planning，前端显示任务已中断并阻塞发送；重连、刷新无效，用户结束任务后取消。对应 run `run_9caab2b381004e18b6f53e9314063581` 最终状态 `cancelled`，`recovery_count` 从 0 增到 3，共执行 4 次。
+- 证据：`react_events` 只有 preparing / planning / resume 循环，没有 `tool_start`；该 run 仅有 2 个检查点，止于新轮状态初始化；`agent_usage_events` 每次 `status=error`、`error_message=RecoverableRunError`、`llm_call_count=2`。Langfuse 两次 input review 的 `react_decision` 都返回 `reference_intent={"kind":"conditions","quote":"把刚才那38只首板股按股票代码升序列出前5只","date_override":"explicit"}`。`ReferenceIntent` 规定 `date_override` 仅 analysis 可用，两次校验失败后 `review_input_security` 抛 `ValueError`，`_review` 转成 `RecoverableRunError`；后台 sweeper 按 `max_recoveries=3` 重试同一确定性失败。run 无 `response_json` 但仍 active，前端禁止发送新问题。
+- 根因：10-30 的输入审核 prompt 压缩提交 `7c6335b` 删除了旧规则中的“none/entities/conditions 的 date_override 均为 null”，只保留 analysis 可填的正向规则。模型在“沿用 2026-10-30 日期”的 conditions 回指中自然补了 `date_override`，prompt 与 schema 不一致。
+- 修复：恢复该约束并压缩进现有 prompt 预算（`date_override 仅 analysis 可填；其余 kind 一律留空，即使消息含日期`），未放宽 schema、未静默丢弃字段、未用正则修补。新增 prompt 契约测试固定该规则及 2600 字符预算。
+- 回归：输入审核、引用意图、会话指代、结构化引用共 84 项通过。
+- 实际 Agent 验证（本地 PostgreSQL，最终措辞重启后新会话 `chat_5fbebd08d90d489db69a20dcaf5ca2e5`）：Q1 涨停概况 completed；原 Q2 completed（run `run_fb0d8ab902f240eb9188f14377c5ecb4`），工具 `limit_up_events` 命中 2026-10-30 首板 38 只并按代码升序返回前 5 只（000410、000417、000525、000568、000596），无 resume；Q3 最高连板 completed（5 板）。三问均无 warning。
+- 遗留：若输入审核将来仍出现确定性 schema 校验失败，当前实现仍会转成 `RecoverableRunError` 并重试 3 次；本次只修复触发根因，未改动错误分类与任务生命周期策略。

@@ -46,6 +46,17 @@ def test_reference_cue_adds_only_the_reference_section():
     assert MEMORY_REVIEW_RULES not in prompt
 
 
+def test_reference_rules_limit_date_override_to_analysis():
+    # A follow-up that inherits conditions and names an explicit date must not
+    # ask the model to emit date_override; the schema rejects it for conditions
+    # and a rejected review otherwise retries the whole run.
+    prompt = build_input_review_system(
+        "把刚才那38只首板股按股票代码升序列出前5只，沿用2026年10月30日的数据。"
+    )
+    assert "date_override 仅 analysis 可填" in prompt
+    assert "其余 kind 一律留空" in prompt
+
+
 def test_referent_hint_adds_the_reference_section_for_a_new_query():
     prompt = build_input_review_system(
         "查询2026-10-29涨停数量",
