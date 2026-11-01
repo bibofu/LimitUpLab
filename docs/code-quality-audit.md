@@ -2,6 +2,15 @@
 
 > 架构更新（2026-10-24）：本文为历史审计记录。旧 `react_runtime`、EvidenceStore、`finish`、`compute_result` 和 Golden/quality 评测代码已删除；当前架构见 [LangChain 集成](LangChain_Integration.md)。
 
+## 2026-11-01：异常退出的 CI 测试集群核查与清理
+
+- 原集群为 `output/ci-postgresql/data`，旧 PID 14936 不存在，49988 端口无人监听，`pg_ctl status` 返回未运行；进程、Windows 服务及计划任务引用均为 0。当前应用连接为独立的 `127.0.0.1:55434/limituplab`，本地配置没有引用旧目录或端口。
+- 对原目录的 1,669 个数据文件逐一记录 SHA-256，制作一致的冷副本；只在副本上移除过期 PID 文件，以独立回环端口、默认只读事务及禁用自动维护的配置恢复。原目录在核查前后逐文件哈希一致。操作方法参考 PostgreSQL 官方 [pg_ctl](https://www.postgresql.org/docs/18/app-pg-ctl.html) 和 [只读事务默认设置](https://www.postgresql.org/docs/18/runtime-config-client.html)。
+- 恢复副本的只读 SQL 核对了实际数据目录、端口及事务状态。`limituplab_test`、`limituplab_eval_test`、`postgres`、`template1` 均只有 `public` 用户 schema，无用户表、视图、序列或其他用户关系，无大对象；不允许连接的仅标准 `template0`。非系统角色仅 `limituplab_test`，准备事务与复制槽均为 0，没有需要保留的业务或研究记录。
+- 占用主要来自 1,024 MiB 的遗留 WAL。保存原退出日志、集群控制信息和核查清单后，正常关闭检查副本，重新确认两个端口及目录均无进程占用，再删除原集群目录和检查副本。原目录共 1,671 个文件、1,169.49 MiB；本次临时复制空间不重复计入释放量。
+- 验证：检查副本控制状态为 `shut down`，原目录与副本均已消失；业务 `/ready` 在清理前后均返回 `status=ok, database=postgresql`。启动命令的输出捕获曾超时，实际服务器就绪日志、目录校验后的 SQL 结果和正常关闭状态均单独核实，未将命令超时计作通过。
+- 审计原件保存在忽略目录 `output/cleanup-ci-20261101/`，含 `usage-check.json`、`original-files.json`、`database-inventory.json`、`inspection-server.log` 和 `cleanup-result.json`。本轮不修改业务代码、数据库连接配置或本地 Run trace 改动。
+
 ## 2026-11-01：output、tmp 与 docs 二次整理
 
 - 核对目录用途、SHA-256、文档及脚本引用、可达 Git blob、进程引用和 PostgreSQL 控制信息。清理 54 个本地目标、4,099 个文件、1,881.40 MiB；逐文件清单与保留路径映射位于忽略目录 `output/cleanup-review-20261101/`。
