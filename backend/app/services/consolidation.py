@@ -1,7 +1,6 @@
 """Deterministic post-limit consolidation screening, without future outcomes."""
 from collections import Counter
 from datetime import date, datetime, time, timedelta
-import math
 from zoneinfo import ZoneInfo
 
 from app.consolidation_models import ConsolidationCandidate, ConsolidationEvaluation, ConsolidationPool, ObservationStrategy
@@ -51,15 +50,6 @@ def observation_pool(now: datetime, strategy: ObservationStrategy, **kwargs) -> 
 def completed_date_limit(now: datetime) -> date:
     local = now.astimezone(SHANGHAI)
     return local.date() if local.time() >= time(15, 30) else local.date() - timedelta(days=1)
-
-
-# Check that a bar has the finite positive price fields needed by observation screening.
-def valid_bar(bar: dict | None) -> bool:
-    return bool(bar and all(isinstance(bar.get(k), (int, float)) and
-                           math.isfinite(bar[k]) and bar[k] > 0
-                           for k in ("open", "high", "low", "close")) and
-                bar["low"] <= min(bar["open"], bar["close"]) <=
-                max(bar["open"], bar["close"]) <= bar["high"])
 
 
 def assess(symbol: str, anchor: str, end: str, calendar: list[str], bars: dict,

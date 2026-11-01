@@ -524,16 +524,6 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         raise RuntimeError(f"LLM request failed: {last_error}")
 
 
-def require_react_provider(provider: LLMProvider) -> None:
-    """Reject providers that only inherit the unsupported message-tool protocol."""
-
-    implementation = getattr(type(provider), "generate_messages", None)
-    if implementation is None or implementation is LLMProvider.generate_messages:
-        raise NativeFunctionCallingUnavailable(
-            f"{type(provider).__name__} cannot be used by production ReAct chat"
-        )
-
-
 def get_llm_provider() -> LLMProvider:
     """Create the configured production ReAct provider from environment variables."""
 

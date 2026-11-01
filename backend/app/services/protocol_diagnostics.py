@@ -1,11 +1,8 @@
 """Allowlisted structural metadata; never retain model text, IDs or argument values."""
 
 import json
-from typing import get_args
 
 from langchain_core.messages import AIMessage, AIMessageChunk
-from pydantic import ValidationError
-from pydantic_core import ErrorType
 
 
 ENUMS = {
@@ -18,7 +15,6 @@ ENUMS = {
 }
 JSON_FAILURES = {"empty", "unexpected_end", "unterminated_string", "syntax", "non_object", "non_string"}
 SHAPES = {"object", "array", "string", "number", "boolean", "null", "other"}
-ERROR_TYPES = set(get_args(ErrorType))
 
 
 def safe_protocol_metadata(value):
@@ -68,22 +64,6 @@ def argument_structure(value, *, encoded=False):
     return {"shape": shape, **({"size": len(value)} if isinstance(value, (dict, list, str)) else {})}
 
 
-def schema_owned_argument_shapes(value, schema):
-    """Describe declared top-level fields only; never enumerate submitted object keys.
-
-    The caller supplies its trusted schema. This distinguishes absent fields,
-    explicit nulls and malformed child types without retaining any child values.
-    """
-    if not isinstance(value, dict):
-        return [{"path": [], **argument_structure(value)}]
-    properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
-    if not isinstance(properties, dict):
-        return []
-    return [{"path": [field], "present": field in value,
-             **(argument_structure(value[field]) if field in value else {})}
-            for field in list(properties)[:16] if isinstance(field, str)]
-
-
 def response_diagnostics(message, *, expected_tool=None, failure_category=None):
     kind = ("none" if message is None else "ai_message_chunk" if isinstance(message, AIMessageChunk)
             else "ai_message" if isinstance(message, AIMessage) else "other")
@@ -112,40 +92,3 @@ def response_diagnostics(message, *, expected_tool=None, failure_category=None):
     if expected_tool is not None:
         result["expected_tool_matches"] = len(calls) == 1 and calls[0].get("name") == expected_tool
     return safe_protocol_metadata(result)
-
-
-def schema_diagnostics(error, schema):
-    """Only schema-owned field names and built-in error codes may cross this boundary."""
-    fields = set()
-    def collect(node):
-        if isinstance(node, dict):
-            fields.update(node.get("properties", {}))
-            for child in node.values():
-                collect(child)
-        elif isinstance(node, list):
-            for child in node:
-                collect(child)
-    collect(schema)
-    # Inputs are inspected only in memory for shape. Never return these raw
-    # records, their messages, or arbitrary dictionary keys to diagnostics.
-    errors = error.errors(include_url=False, include_context=False, include_input=True)
-    sanitized = []
-    for item in errors[:12]:
-        path = [part if type(part) is int or isinstance(part, str) and part in fields
-                else "<unknown>" for part in item["loc"][:12]]
-        detail = {"path": path, "type": item["type"] if item["type"] in ERROR_TYPES else "custom_error"}
-        if "<unknown>" not in path and "input" in item and item["type"] != "missing":
-            # Missing-field errors attach their parent input, not a child value.
-            detail["input_shape"] = argument_structure(item["input"])
-        sanitized.append(detail)
-    return {"failure_category": "schema_validation", "schema_error_count": len(errors),
-            "schema_errors": sanitized}
-
-
-def failure_diagnostics(error, *, schema, current=None):
-    from app.services.llm_provider import NativeFunctionCallingError
-    result = {**(current or {}), **safe_protocol_metadata(getattr(error, "diagnostics", None))}
-    if isinstance(error, ValidationError):
-        result.update(schema_diagnostics(error, schema))
-    result.setdefault("failure_category", "native_protocol" if isinstance(error, NativeFunctionCallingError) else "request")
-    return result

@@ -35,11 +35,6 @@ def tools_in_text(value: str | None) -> set[str]:
     }
 
 
-def tool_from_text(value: str | None) -> str | None:
-    tools = tools_in_text(value)
-    return next(iter(tools)) if len(tools) == 1 else None
-
-
 def topics_in_text(value: str | None) -> list[str]:
     text = value or ""
     return [topic for topic in TOPIC_SCOPE_TERMS if topic in text]

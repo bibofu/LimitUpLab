@@ -16,7 +16,6 @@ from app.services.llm_provider import (
     DEFAULT_MODEL,
     DEFAULT_OPENAI_BASE_URL,
     LLMProvider,
-    LLMResult,
     NativeFunctionCallingError,
     NativeFunctionCallingUnavailable,
 )

@@ -1508,22 +1508,6 @@ def _date(value: object) -> date | None:
         return None
 
 
-# Extract a date from the provider's timestamp representation.
-# A None result represents the unavailable or inapplicable branch; callers must check it before
-# using the value.
-def _timestamp_date(value: object) -> date | None:
-    timestamp = _integer(value)
-    if timestamp is None:
-        return None
-    try:
-        return datetime.fromtimestamp(
-            timestamp / 1000,
-            tz=timezone.utc,
-        ).date()
-    except (OSError, OverflowError, ValueError):
-        return None
-
-
 # Interpret a timestamp in the Shanghai timezone before taking its calendar date.
 # A None result represents the unavailable or inapplicable branch; callers must check it before
 # using the value.

@@ -73,9 +73,3 @@ class PostLimitQueryContract:
             value = payload[field]
             payload[field] = value.isoformat() if value else None
         return payload
-
-    def to_tool_arguments(self) -> dict[str, Any]:
-        payload = self.to_dict()
-        payload.pop("version", None)
-        payload.pop("mode", None)
-        return payload
