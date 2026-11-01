@@ -109,21 +109,34 @@ def test_nonverbatim_reference_quote_is_rejected():
         validated_reference_intent({"kind": "entities", "quote": "上一次的第二只", "ordinal": 2}, "查询今天第40只")
 
 
-def test_required_intent_uses_existing_bounded_schema_repair_without_extra_normal_round():
+def test_optional_reference_intent_degrades_without_extra_model_round():
     missing = input_review()
     missing.tool_calls[0]["args"].pop("reference_intent")
-    provider = ScriptedProvider([missing, input_review()])
-    assert review_input_security(provider, message="查询今天第40只").reference_intent.kind == "none"
-    assert len(provider.calls) == 2
+    provider = ScriptedProvider([missing])
+    assert review_input_security(provider, message="查询今天第40只").reference_intent is None
+    assert len(provider.calls) == 1
     provider = ScriptedProvider([input_review(reference_intent={"kind": "entities", "quote": "第二只", "ordinal": 2})])
     assert review_input_security(provider, message="第二只最近走势").reference_intent.ordinal == 2
     assert len(provider.calls) == 1
 
 
-def test_bad_reference_quote_fails_after_existing_two_attempts():
+def test_bad_reference_quote_is_ignored_instead_of_failing_the_review():
     bad = input_review(reference_intent={"kind": "entities", "quote": "第二只", "ordinal": 2})
-    with pytest.raises(ValueError, match="Input security review failed"):
-        review_input_security(ScriptedProvider([bad, bad]), message="查询今天第40只")
+    provider = ScriptedProvider([bad])
+    decision = review_input_security(provider, message="查询今天第40只")
+    assert decision.decision == "allow"
+    assert decision.reference_intent is None
+    assert len(provider.calls) == 1
+
+
+def test_invalid_core_decision_uses_one_bounded_repair():
+    invalid = input_review()
+    invalid.tool_calls[0]["args"]["decision"] = "maybe"
+    provider = ScriptedProvider([invalid, input_review()])
+    decision = review_input_security(provider, message="查询今天第40只")
+    assert decision.decision == "allow"
+    assert len(provider.calls) == 2
+    assert "validation_errors" in provider.calls[1][-1].content
 
 
 @pytest.mark.parametrize("query,intent,expected", [

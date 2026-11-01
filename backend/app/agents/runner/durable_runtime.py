@@ -119,8 +119,18 @@ def _review(state, deps):
                 referent_hint=compact_referent_hint(state.get("conversation", {})),
             )
         except Exception as error:
-            from app.agents.runtime_errors import RecoverableRunError
-            raise RecoverableRunError("输入审核暂时中断，尚未执行工具。") from error
+            # A failed mandatory review is an answerable outcome, not a durable
+            # interruption: report it in one normal response so the session is
+            # never blocked behind sweeper retries of the same deterministic
+            # failure. Optional hints inside a valid decision degrade separately.
+            logger.warning(
+                "input_review_unavailable run_id=%s error_type=%s",
+                deps.control.row["run_id"], type(error).__name__,
+            )
+            return {
+                "answer": "输入审核暂时无法完成，本次未执行任何研究查询。请稍后重试；如重复出现，请换一种表述。",
+                "status": "error", "stop_reason": "input_review_unavailable", "done": True,
+            }
         if decision.decision == "refuse":
             trading_advice = "trading_advice" in decision.signals
             return {"answer": REFUSAL if trading_advice else

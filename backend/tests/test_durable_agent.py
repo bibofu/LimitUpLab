@@ -125,6 +125,40 @@ def test_input_review_tool_and_answer_have_native_checkpoints_before_delivery(wo
     run_async(scenario())
 
 
+def test_input_review_failure_returns_error_answer_without_recoverable_interruption(world):
+    request, control, history = world.start()
+    provider = ScriptedProvider([ConnectionError("injected review failure")])
+    execution, calls = runner(request, provider, history=history)
+
+    async def scenario():
+        async with runtime_for(world) as runtime:
+            result = await runtime.run(execution, control)
+            assert result.status == "error"
+            assert result.stop_reason == "input_review_unavailable"
+            assert "本次未执行任何研究查询" in result.answer
+            assert calls == [] and len(provider.calls) == 1
+
+    run_async(scenario())
+
+
+def test_invalid_optional_reference_hint_still_answers(world):
+    request, control, history = world.start("第二只最近走势")
+    bad_review = input_review(reference_intent={
+        "kind": "entities", "quote": "不在原文里", "ordinal": 2,
+    })
+    provider = ScriptedProvider([bad_review, tool_call(), list_answer()])
+    execution, calls = runner(request, provider, history=history)
+
+    async def scenario():
+        async with runtime_for(world) as runtime:
+            result = await runtime.run(execution, control)
+            assert result.status == "answered"
+            assert result.tool_count == 1
+            assert len(calls) == 1
+
+    run_async(scenario())
+
+
 def test_model_failure_resumes_without_repeating_input_review_or_tool(world):
     request, control, history = world.start()
     first = ScriptedProvider([input_review(), tool_call(), ConnectionError("injected provider failure")])

@@ -153,6 +153,63 @@ TOOL = {
 }
 
 
+def _core_decision(raw: object, message: str) -> SecurityDecision:
+    """Validate only the mandatory safety decision.
+
+    Reference and memory hints are optional execution inputs. A malformed hint
+    must not turn an otherwise usable allow/refuse decision into a failed run.
+    """
+
+    values = raw if isinstance(raw, dict) else {}
+    decision = SecurityDecision.model_validate({
+        "decision": values.get("decision"),
+        "signals": values.get("signals", []),
+        "reason": values.get("reason", ""),
+        "trading_action_quote": values.get("trading_action_quote"),
+        "reference_intent": None,
+        "memory_intent": None,
+    })
+    if decision.decision == "allow" and decision.signals:
+        raise ValueError("Allowed input review cannot contain signals")
+    if decision.decision == "refuse" and not decision.signals:
+        raise ValueError("Refused input review must identify a signal")
+    if (decision.trading_action_quote is not None
+            and decision.trading_action_quote not in message):
+        raise ValueError(
+            "trading_action_quote must be an exact excerpt of the user message, "
+            "not inferred intent"
+        )
+    return decision
+
+
+def _optional_reference(raw: object, message: str) -> ReferenceIntent | None:
+    """Parse a reference hint best-effort; never fail the safety decision."""
+
+    if not isinstance(raw, dict):
+        return None
+    candidate = dict(raw)
+    if candidate.get("kind") != "analysis":
+        # date_override only changes an analysis scope. Dropping it here keeps
+        # the consumed meaning intact instead of rejecting the whole hint.
+        candidate.pop("date_override", None)
+    try:
+        return validated_reference_intent(candidate, message)
+    except (ValidationError, ValueError):
+        return None
+
+
+def _optional_memory(raw: object, message: str) -> MemoryIntent | None:
+    """Parse a memory hint best-effort; never fail the safety decision."""
+
+    if not isinstance(raw, dict):
+        return None
+    try:
+        intent = MemoryIntent.model_validate(raw)
+    except (ValidationError, ValueError):
+        return None
+    return intent if intent.quote in message else None
+
+
 def review_input_security(
     provider,
     *,
@@ -160,7 +217,7 @@ def review_input_security(
     timeout_seconds: float = 10,
     referent_hint: dict | None = None,
 ) -> SecurityDecision:
-    """Classify one user message, with one bounded schema repair."""
+    """Classify one user message; only the core decision may trigger repair."""
 
     system = build_input_review_system(message, referent_hint)
     payload: dict = {"message": message}
@@ -179,30 +236,21 @@ def review_input_security(
                 or response.tool_calls[0]["name"] != "submit_input_security_review"):
             last_error = ValueError("Input security reviewer did not return the required decision")
         else:
+            raw = response.tool_calls[0]["args"]
             try:
-                decision = SecurityDecision.model_validate(response.tool_calls[0]["args"])
-                if decision.decision == "allow" and decision.signals:
-                    raise ValueError("Allowed input review cannot contain signals")
-                if decision.decision == "refuse" and not decision.signals:
-                    raise ValueError("Refused input review must identify a signal")
-                if decision.decision == "refuse":
-                    # Reference/memory intent is irrelevant to a refusal and was
-                    # already cleared by the before-validator.
-                    if decision.trading_action_quote is not None and decision.trading_action_quote not in message:
-                        raise ValueError(
-                            "trading_action_quote must be an exact excerpt of the user message, "
-                            "not inferred intent"
-                        )
-                    return decision
-                if decision.memory_intent is not None and decision.memory_intent.quote not in message:
-                    raise ValueError("Memory intent requires an exact current-user request quote")
-                if decision.reference_intent is not None:
-                    validated_reference_intent(decision.reference_intent, message)
-                elif _has_reference_cue(message):
-                    raise ValueError("reference_intent is required for a follow-up query")
-                return decision
+                decision = _core_decision(raw, message)
             except (ValidationError, ValueError) as error:
                 last_error = error
+            else:
+                hints: dict = {}
+                if decision.decision == "allow":
+                    reference = _optional_reference(raw.get("reference_intent"), message)
+                    memory = _optional_memory(raw.get("memory_intent"), message)
+                    if reference is not None:
+                        hints["reference_intent"] = reference
+                    if memory is not None:
+                        hints["memory_intent"] = memory
+                return decision.model_copy(update=hints)
         if attempt == 0:
             payload["validation_errors"] = [str(last_error)[:240]]
     raise ValueError(f"Input security review failed: {last_error}")

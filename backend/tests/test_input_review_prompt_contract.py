@@ -120,21 +120,46 @@ def test_plain_allow_does_not_require_reference_intent():
     assert len(provider.calls) == 1
 
 
-def test_followup_allow_without_reference_intent_uses_one_repair():
-    first = call("submit_input_security_review", {
+def test_followup_allow_without_reference_intent_degrades_without_repair():
+    provider = ScriptedProvider([call("submit_input_security_review", {
         "decision": "allow",
         "signals": [],
         "reason": "follow-up research question",
-    })
-    second = call("submit_input_security_review", {
-        "decision": "allow",
-        "signals": [],
-        "reason": "follow-up research question",
-        "reference_intent": {"kind": "entities", "quote": "第二只", "ordinal": 2},
-    })
-    provider = ScriptedProvider([first, second])
+    })])
     decision = review_input_security(provider, message="第二只最近走势")
-    assert decision.reference_intent is not None
-    assert decision.reference_intent.kind == "entities"
-    assert len(provider.calls) == 2
-    assert "validation_errors" in provider.calls[1][-1].content
+    assert decision.decision == "allow"
+    assert decision.reference_intent is None
+    assert len(provider.calls) == 1
+
+
+def test_conditions_followup_with_date_override_is_normalized_in_one_call():
+    provider = ScriptedProvider([call("submit_input_security_review", {
+        "decision": "allow",
+        "signals": [],
+        "reason": "conditions follow-up with an explicit date",
+        "reference_intent": {
+            "kind": "conditions", "quote": "刚才那38只首板股", "date_override": "explicit",
+        },
+    })])
+    decision = review_input_security(
+        provider, message="把刚才那38只首板股按股票代码升序列出前5只，沿用2026年10月30日的数据。"
+    )
+    assert decision.decision == "allow"
+    assert decision.reference_intent.kind == "conditions"
+    assert decision.reference_intent.date_override is None
+    assert len(provider.calls) == 1
+
+
+def test_invalid_optional_hints_do_not_fail_the_safety_decision():
+    provider = ScriptedProvider([call("submit_input_security_review", {
+        "decision": "allow",
+        "signals": [],
+        "reason": "research question",
+        "reference_intent": {"kind": "entities", "quote": "不在原文里", "ordinal": 2},
+        "memory_intent": {"action": "save", "quote": "不在原文里"},
+    })])
+    decision = review_input_security(provider, message="查询今天第40只")
+    assert decision.decision == "allow"
+    assert decision.reference_intent is None
+    assert decision.memory_intent is None
+    assert len(provider.calls) == 1

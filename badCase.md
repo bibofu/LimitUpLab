@@ -445,4 +445,15 @@
 - 修复：恢复该约束并压缩进现有 prompt 预算（`date_override 仅 analysis 可填；其余 kind 一律留空，即使消息含日期`），未放宽 schema、未静默丢弃字段、未用正则修补。新增 prompt 契约测试固定该规则及 2600 字符预算。
 - 回归：输入审核、引用意图、会话指代、结构化引用共 84 项通过。
 - 实际 Agent 验证（本地 PostgreSQL，最终措辞重启后新会话 `chat_5fbebd08d90d489db69a20dcaf5ca2e5`）：Q1 涨停概况 completed；原 Q2 completed（run `run_fb0d8ab902f240eb9188f14377c5ecb4`），工具 `limit_up_events` 命中 2026-10-30 首板 38 只并按代码升序返回前 5 只（000410、000417、000525、000568、000596），无 resume；Q3 最高连板 completed（5 板）。三问均无 warning。
-- 遗留：若输入审核将来仍出现确定性 schema 校验失败，当前实现仍会转成 `RecoverableRunError` 并重试 3 次；本次只修复触发根因，未改动错误分类与任务生命周期策略。
+- 遗留：本条只修复触发根因，未改动错误分类与任务生命周期策略；由下一条将可选提示解析与核心审核失败的处理一并调整。
+
+## 2026-11-01：输入审核可选提示改为尽力解析，审核失败不再终止任务
+
+- 问题：输入审核把必需的 allow/refuse 判定与可选的 `reference_intent` / `memory_intent` 放在同一个严格 schema 中；任何可选字段不合法（如 conditions 带 date_override、引用原文不逐字）都会让整个审核抛错，`_review` 再转成 `RecoverableRunError`，导致整轮任务中断、后台重试、前端阻塞发送。安全判定本身失败同样会变成可恢复中断。
+- 设计调整：
+  - 核心判定（decision / signals / reason / trading_action_quote）仍是必须项，只有它可以触发一次 schema 修复；修复失败返回普通错误回答“输入审核暂时无法完成，本次未执行任何研究查询…”，不抛 `RecoverableRunError`，不进入 sweeper 重试，也不阻塞会话。
+  - `reference_intent` / `memory_intent` 改为尽力解析：非 analysis 的 `date_override` 在解析前丢弃（该字段只在 analysis 消费）；其余校验失败或引用原文不逐字时直接丢弃该提示，保留 allow/refuse 判定继续回答。
+  - 不再因为消息含“刚才/沿用”等线索而强制要求 `reference_intent`；缺失时按 kind=none 继续，主 Agent 仍可结合会话上下文回答。
+- 回归：输入审核、引用意图、会话指代、结构化引用、durable agent、长期记忆共 105 项通过；新增用例覆盖 conditions+date_override 单次归一化、非法可选提示不失败、审核异常返回普通错误回答、非法引用提示仍正常回答。
+- 实际 Agent 验证（本地 PostgreSQL，重启后新会话 `chat_c0eded8837674d16a40ce5af336e6c68`）：Q1/Q2/Q3 均 completed；Q2 仍通过 `limit_up_events` 命中 38 只首板并按代码升序返回前 5 只，无 resume、无 warning。
+- 边界：安全判定仍不可省略；只是在它无法完成时给用户一个明确的“本次没有查询”回答，而不是把会话卡死。

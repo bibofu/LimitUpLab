@@ -3,7 +3,6 @@
 import json
 
 from langchain_core.messages import AIMessage
-import pytest
 
 from app.agents.memory_commands import execute_memory_request, prepare_memory_request, repository_for
 from app.agents.memory_policy import MemoryIntent
@@ -159,11 +158,13 @@ def test_plain_question_does_not_write_memory(world):
     run_async(scenario())
 
 
-def test_security_rejects_fabricated_memory_consent_quote():
+def test_security_ignores_fabricated_memory_consent_quote():
     response = review_memory("请永久保存这个偏好")
-    provider = ScriptedProvider([response, response])
-    with pytest.raises(ValueError, match="exact current-user request quote"):
-        review_input_security(provider, message="解释长期记忆系统")
+    provider = ScriptedProvider([response])
+    decision = review_input_security(provider, message="解释长期记忆系统")
+    assert decision.decision == "allow"
+    assert decision.memory_intent is None
+    assert len(provider.calls) == 1
 
 
 def review_free_text(query):

@@ -12,7 +12,6 @@ from app.agents.runner.guardrails import REFUSAL
 from app.agents.tools import AgentToolRegistry
 from app.models import AgentChatRequest
 from app.services.sample_data import SAMPLE_EVENTS
-from app.agents.runtime_errors import RecoverableRunError
 from runner_node_harness import durable_request
 
 
@@ -115,8 +114,10 @@ def test_public_entry_fails_closed_on_malformed_security_review(monkeypatch):
         input_review(decision="allow", signals=("instruction_override",)),
         input_review(decision="allow", signals=("instruction_override",)),
     ])
-    with pytest.raises(RecoverableRunError):
-        ask(provider, monkeypatch)
+    response = ask(provider, monkeypatch)
+    assert response.task_status == "error"
+    assert response.stop_reason == "input_review_unavailable"
+    assert response.tool_calls == []
     assert provider.responses == []
 
 
@@ -227,6 +228,8 @@ def test_unrepairable_trading_assessment_fails_closed_without_business_queries(m
         input_review(decision="refuse", signals=("trading_advice",)),
         input_review(decision="refuse", signals=("trading_advice",)),
     ])
-    with pytest.raises(RecoverableRunError):
-        ask(provider, monkeypatch, "比较历史评分与风险。")
+    response = ask(provider, monkeypatch, "比较历史评分与风险。")
+    assert response.task_status == "error"
+    assert response.stop_reason == "input_review_unavailable"
+    assert response.tool_calls == []
     assert len(provider.calls) == 2
