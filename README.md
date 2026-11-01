@@ -103,6 +103,8 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 复盘问题由内置 `daily-review` skill（标准 `SKILL.md` 目录，`app/agents/skills/daily-review/SKILL.md`）编排：先取 `market_event_pool` 的当日聚合，再按用户关注点加载首板/晋级、板块、龙虎榜、指数或评分工具；默认给紧凑摘要，不套固定模板，也不输出交易指令。
 
+个股综合诊断由内置 `stock-diagnosis` skill（`app/agents/skills/stock-diagnosis/SKILL.md`）编排：先确认唯一标的与日期，再按用户关注读取 K 线、涨停事件、评分补充、公司资料、财报、个股资讯和龙虎榜；当前快照与历史数据、累计与单季口径必须分开说明，缺失数据显式披露。多个 skill 按最长触发词选择，长度相同时优先 `daily-review`。
+
 生产环境依赖上一步名单的查询由模型在观察结果后发起下一轮工具调用；筛选、排序和聚合直接基于工具返回的结构化 rows 与字段说明，模型不再维护 evidence ID 或表达式 DSL。
 
 默认 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 只暴露收盘后与历史研究工具。BusinessToolGateway 对每一次调用重新校验 allowlist、JSON Schema、日期回显、单股票约束和空集合边界，未知或未开放工具即使由模型生成也不会执行。

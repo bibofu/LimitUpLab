@@ -2,6 +2,7 @@
 
 from app.agents.skills.loader import (
     DEFAULT_SKILL,
+    STOCK_SKILL,
     Skill,
     available_skills,
     clear_skill_cache,
@@ -12,6 +13,7 @@ from app.agents.skills.loader import (
 
 __all__ = [
     "DEFAULT_SKILL",
+    "STOCK_SKILL",
     "Skill",
     "available_skills",
     "clear_skill_cache",
