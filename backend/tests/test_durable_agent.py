@@ -159,6 +159,29 @@ def test_invalid_optional_reference_hint_still_answers(world):
     run_async(scenario())
 
 
+def test_checkpoint_without_review_marker_is_reviewed_before_agent(world):
+    request, control, history = world.start()
+    first, first_calls = runner(request, ScriptedProvider([
+        input_review(), tool_call(), ConnectionError("pause before answer"),
+    ]), history=history)
+
+    async def scenario():
+        async with runtime_for(world) as runtime:
+            with pytest.raises(RecoverableRunError):
+                await runtime.run(first, control)
+            config = execution_config(control.row, control.execution)
+            await runtime.graph.aupdate_state(config, {"reviewed": False})
+        provider = ScriptedProvider([input_review(), list_answer()])
+        resumed, later_calls = runner(request, provider, history=history)
+        async with runtime_for(world) as runtime:
+            result = await runtime.run(resumed, control)
+            assert result.status == "answered"
+            assert len(provider.calls) == 2
+            assert len(first_calls) == 1 and later_calls == []
+
+    run_async(scenario())
+
+
 def test_model_failure_resumes_without_repeating_input_review_or_tool(world):
     request, control, history = world.start()
     first = ScriptedProvider([input_review(), tool_call(), ConnectionError("injected provider failure")])
@@ -229,15 +252,17 @@ def test_next_turn_resets_run_counters_and_uses_only_committed_references(world)
                 world.start("第二只走势怎么样？")
             world.deliver(request, control, result)
             request2, control2, history2 = world.start("第二只走势怎么样？")
-            provider2 = ScriptedProvider([input_review(reference_intent={
-                "kind": "entities", "quote": "第二只", "ordinal": 2}), tool_call(), AIMessage(content="样本甲的本轮数据已返回。")])
+            provider2 = ScriptedProvider([input_review(), tool_call(), AIMessage(content="样本甲的本轮数据已返回。")])
             second, calls = runner(request2, provider2, history=history2)
             result2 = await runtime.run(second, control2)
             state2 = await runtime.graph.aget_state(execution_config(control2.row, control2.execution))
             assert result2.status == "answered"
             assert result2.tool_count == 1 and result2.model_rounds == 2 and len(calls) == 1
             assert state2.values["run_id"] == control2.row["run_id"]
-            assert state2.values["resolved_reference"]["symbols"] == ["600001"]
+            agent_input = provider2.calls[1][1].content
+            referents = json.loads(agent_input.split("\n", 1)[1])["conversation_referents"]
+            assert {item["symbol"] for item in referents["stocks"]} == {"000002", "600001", "300003"}
+            assert referents["stock_set"]["ordered_symbols"] == ["000002", "600001", "300003"]
             assert state2.values["conversation"]["active_references"][0]["source_run_id"] == control.row["run_id"]
             assert state2.values["pending"] == []
             assert len(state2.values["tool_messages"]) == 1

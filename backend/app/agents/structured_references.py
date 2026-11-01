@@ -494,45 +494,6 @@ def history_stock_hint(recent_messages: list[Any]) -> dict[str, Any] | None:
     return None
 
 
-def compact_referent_hint(conversation: dict[str, Any] | None) -> dict[str, Any] | None:
-    """Small, bounded hint for input review; never the full conversation."""
-    conversation = conversation or {}
-    referents = conversation.get("referents")
-    hint: dict[str, Any] = {}
-    if isinstance(referents, dict):
-        stocks = referents.get("stocks")
-        stock_set = referents.get("stock_set")
-        if isinstance(stocks, list) and stocks:
-            ordered = stock_set.get("ordered_symbols") if isinstance(stock_set, dict) else None
-            if isinstance(ordered, list) and ordered:
-                by_symbol = {item.get("symbol"): item for item in stocks if isinstance(item, dict)}
-                selected = [by_symbol[symbol] for symbol in ordered if symbol in by_symbol]
-            else:
-                selected = [item for item in stocks if isinstance(item, dict)]
-            hint["stocks"] = [{"symbol": item.get("symbol"), "name": item.get("name")}
-                              for item in selected[:10]]
-            if isinstance(stock_set, dict):
-                hint["stock_set_kind"] = stock_set.get("kind")
-        analyses = referents.get("analyses")
-        if isinstance(analyses, list) and analyses:
-            analysis = analyses[0] if len(analyses) == 1 and isinstance(analyses[0], dict) else None
-            if analysis:
-                hint["analysis"] = {key: analysis.get(key) for key in (
-                    "tool", "metric_keys", "as_of", "previous_trade_date")}
-                hint["analysis_count"] = 1
-            else:
-                hint["analysis_count"] = len(analyses)
-        date_scope = referents.get("date_scope")
-        if isinstance(date_scope, dict) and date_scope:
-            hint["date_scope"] = {key: date_scope.get(key) for key in (
-                "as_of", "previous_trade_date", "next_trade_date")}
-    if not hint.get("stocks"):
-        history = history_stock_hint(conversation.get("recent_messages") or [])
-        if history:
-            hint["history_stock"] = history
-    return hint or None
-
-
 def _page_conflict(symbols: list[str], page_context: dict | None) -> bool:
     page_symbol = _symbol((page_context or {}).get("symbol"))
     if not page_symbol:

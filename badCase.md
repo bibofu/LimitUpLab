@@ -457,3 +457,18 @@
 - 回归：输入审核、引用意图、会话指代、结构化引用、durable agent、长期记忆共 105 项通过；新增用例覆盖 conditions+date_override 单次归一化、非法可选提示不失败、审核异常返回普通错误回答、非法引用提示仍正常回答。
 - 实际 Agent 验证（本地 PostgreSQL，重启后新会话 `chat_c0eded8837674d16a40ce5af336e6c68`）：Q1/Q2/Q3 均 completed；Q2 仍通过 `limit_up_events` 命中 38 只首板并按代码升序返回前 5 只，无 resume、无 warning。
 - 边界：安全判定仍不可省略；只是在它无法完成时给用户一个明确的“本次没有查询”回答，而不是把会话卡死。
+
+## 2026-11-01：指代解析移出输入审核，交给主模型
+
+- 变更动机：输入审核同时承担安全判定和指代分类，导致可选字段的 schema 问题能打断整轮。用户要求“直接给 LLM message，让它自己解析”，输入审核只保留安全判定。
+- 实现：
+  - `SecurityDecision` 移除 `reference_intent`；`review_input_security` 只返回 allow/refuse、signals、reason、trading_action_quote 和可选 `memory_intent`。未知字段改为忽略，不再因为模型多输出旧字段而失败。
+  - 聊天上下文新增 `conversation_referents`：上一轮股票代码/名称（名称最多 200 条）、完整展示顺序 `stock_set.ordered_symbols`、`analyses` 和 `date_scope`；生产路径不再传 `reference_intent`，也不再生成 `resolved_reference`。
+  - `CONTEXT_RULES` 改为要求主模型结合 `conversation_referents`、`active_references` 和用户消息自行解析“这些/那些/它们/它/这只/第N只”；名单多组、无法唯一匹配或单体指向多只时必须先询问；选中的股票必须本轮工具核验。
+  - 确定性解析器 `resolve_reference` 保留为显式调用的库能力（测试/旧调用方），但不进入聊天链路；删除仅供输入审核使用的 `REFERENCE_REVIEW_RULES` 和 `compact_referent_hint`。
+- 回归：全量后端 2198 passed、3 skipped、22 subtests；输入审核 prompt 只保留安全规则和按需挂载的记忆规则。
+- 实际 Agent 验证（本地 PostgreSQL，重启后）：
+  - Q1 涨停概况、原 Q2“刚才那38只首板股…”、Q3 最高连板均 completed；Q2 仍命中 38 只首板并按代码升序返回前 5 只。
+  - “这些股票里哪几只属于白酒” → 用上一轮 5 只筛选出 2 只；“那些股票里代码最小的是哪只” → 000410 沈阳机床；“它们最近的5日涨跌幅” → 沿用上一轮筛出的 2 只白酒股。
+  - “它最近的5日涨跌幅”与“这只呢”在上一轮 5 只时均由主模型要求澄清，没有猜股票。
+- 边界：指代解析现在依赖主模型，歧义处理不再是确定性代码路径；回答仍需工具证据，错误指代不会造成无来源数值。

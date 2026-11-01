@@ -108,7 +108,6 @@ def _retrieve(control, query):
 
 def _review(state, deps):
     from app.agents.memory_commands import prepare_memory_request
-    from app.agents.structured_references import compact_referent_hint
     with execution_context(deps), trace_stage("input_review", {"node": "input_review"}):
         if deps.control.cancelled():
             return deps.runner._cancelled_stop()
@@ -116,13 +115,12 @@ def _review(state, deps):
         try:
             decision = review_input_security(
                 deps.runner.provider, message=state["current_query"], timeout_seconds=10,
-                referent_hint=compact_referent_hint(state.get("conversation", {})),
             )
         except Exception as error:
             # A failed mandatory review is an answerable outcome, not a durable
             # interruption: report it in one normal response so the session is
             # never blocked behind sweeper retries of the same deterministic
-            # failure. Optional hints inside a valid decision degrade separately.
+            # failure. Memory hints inside a valid decision degrade separately.
             logger.warning(
                 "input_review_unavailable run_id=%s error_type=%s",
                 deps.control.row["run_id"], type(error).__name__,
@@ -138,11 +136,7 @@ def _review(state, deps):
                     "status": "refuse", "stop_reason": "input_trading_advice" if trading_advice else "input_policy", "done": True}
         proposal = prepare_memory_request(decision.memory_intent, deps.control, retrieved.owner_revision) \
             if decision.memory_intent else {}
-        return {"done": False, "memory_request": proposal,
-                "reference_intent": (
-                    decision.reference_intent.model_dump()
-                    if decision.reference_intent is not None else {"kind": "none"}
-                ),
+        return {"done": False, "reviewed": True, "memory_request": proposal,
                 "memory_owner_revision": retrieved.owner_revision,
                 "memory_context_fingerprint": retrieved.context_fingerprint,
                 "memory_dependencies": list(retrieved.dependencies)}
@@ -193,9 +187,9 @@ def _agent(state, deps):
                     0, state["remaining_seconds"] - (perf_counter() - started)
                 ),
             }
-        # Pre-v4 pending checkpoints have no reviewed reference meaning. Review
-        # once before another model call; never restore the old ordinal heuristic.
-        if state.get("reference_intent") is None:
+        # Checkpoints written before the review marker existed must still pass
+        # the mandatory safety review before another model call.
+        if not state.get("reviewed"):
             reviewed = _review(state, deps)
             if reviewed.get("done"):
                 return reviewed
@@ -224,7 +218,6 @@ def _agent(state, deps):
                     conversation=conversation, working_messages=working, long_term_memory=retrieved,
                     page_context=page, tool_definitions=runner.definitions,
                     working_memory_dependencies=state.get("memory_dependencies"),
-                    reference_intent=state["reference_intent"],
                 )
                 details.update(built.diagnostics)
         except ContextBudgetExceeded:
@@ -233,9 +226,6 @@ def _agent(state, deps):
         except ContextMessageError:
             return {"answer": "本轮工具消息不完整，无法继续生成可核验回答，请重新发起查询。",
                     "status": "error", "stop_reason": "invalid_tool_context", "done": True}
-        if built.clarification:
-            return {"answer": built.clarification, "status": "clarify", "stop_reason": "reference_ambiguous",
-                    "done": True, "context_diagnostics": built.diagnostics}
         diagnostics = {**built.diagnostics, "thread_id": deps.control.row["session_id"],
                        "run_id": deps.control.row["run_id"], "prompt_version": PROMPT_VERSION,
                        "summary_triggered": bool(conversation.get("summary_triggered")),
@@ -251,8 +241,6 @@ def _agent(state, deps):
                       display_policies=display_policies,
                       memory_context_used=bool(built.diagnostics.get("memory_hit_count", 0)))
         update["context_diagnostics"] = diagnostics
-        update["resolved_reference"] = built.resolved_reference or {}
-        update["reference_intent"] = state["reference_intent"]
         update["remaining_seconds"] = max(0, state["remaining_seconds"] - (perf_counter() - started))
         return update
 
@@ -492,7 +480,7 @@ class DurableRuntime:
                        "tool_messages": [], "model_rounds": 0, "tool_count": 0, "done": False,
                        "answer": "", "status": "", "stop_reason": "", "error": "",
                        "answer_repair": False, "compliance_reviewed": False,
-                       "context_diagnostics": {}, "resolved_reference": {}, "reference_intent": None,
+                       "context_diagnostics": {}, "reviewed": False,
                        "memory_request": {}, "memory_action": {}, "memory_owner_revision": 0,
                        "memory_context_fingerprint": "", "memory_dependencies": [],
                        "display_policies": [], "memory_context_used": False,

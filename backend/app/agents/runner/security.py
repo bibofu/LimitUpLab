@@ -8,14 +8,12 @@ before business queries; it does not compile the research task or output.
 from __future__ import annotations
 
 import json
-import re
 from typing import Literal
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.agents.memory_policy import MEMORY_REVIEW_RULES, MemoryIntent
-from app.agents.reference_intent import REFERENCE_REVIEW_RULES, ReferenceIntent, validated_reference_intent
 
 SecuritySignal = Literal[
     "instruction_override",
@@ -27,36 +25,24 @@ SecuritySignal = Literal[
     "trading_advice",
 ]
 
-# Memory and reference rules are long and irrelevant to a plain research
-# question. Only attach them when the message actually contains a cue.
+# Memory rules are long and irrelevant to a plain research question. Only
+# attach them when the message actually contains a memory cue.
 _MEMORY_CUES = (
     "记住", "保存", "记下", "以后", "每次", "默认", "始终", "忘记",
     "长期记忆", "偏好", "习惯", "别再", "改成默认",
 )
-_REFERENCE_CUES = (
-    "刚才", "上次", "上条", "上一", "它", "这只", "那只", "那批", "这些",
-    "他们", "继续", "沿用", "换成", "同一个", "同一天", "前一天",
-    "上一个交易日", "昨天", "前天", "上面", "前面", "该股", "这两", "这三",
-    "同样",
-)
-_STOCK_ORDINAL = re.compile(r"第\s*[0-9一二三四五六七八九十百]+\s*只")
 
 
 class SecurityDecision(BaseModel):
     """The only output of the lightweight input review."""
 
-    model_config = ConfigDict(extra="forbid")
+    # Unknown fields from a model are ignored: this object is a control hint,
+    # not a place to fail an otherwise usable safety decision.
+    model_config = ConfigDict(extra="ignore")
 
     decision: Literal["allow", "refuse"]
     signals: list[SecuritySignal] = Field(default_factory=list, max_length=7)
     reason: str = Field(min_length=1, max_length=300)
-    reference_intent: ReferenceIntent | None = Field(
-        default=None,
-        description=(
-            "仅在允许且消息含回指/条件继承线索时填写；拒绝或新查询可省略，"
-            "服务端按 kind=none 处理。"
-        ),
-    )
     memory_intent: MemoryIntent | None = None
     trading_action_quote: str | None = Field(
         default=None, min_length=1, max_length=240,
@@ -68,10 +54,10 @@ class SecurityDecision(BaseModel):
     @model_validator(mode="before")
     @classmethod
     def ignore_irrelevant_on_refuse(cls, data):
-        """A refusal must never depend on unrelated memory/reference parsing."""
+        """A refusal must never depend on unrelated memory parsing."""
 
         if isinstance(data, dict) and data.get("decision") == "refuse":
-            return {**data, "reference_intent": None, "memory_intent": None}
+            return {**data, "memory_intent": None}
         return data
 
     @model_validator(mode="after")
@@ -124,19 +110,12 @@ def _has_memory_cue(message: str) -> bool:
     return any(term in message for term in _MEMORY_CUES)
 
 
-def _has_reference_cue(message: str) -> bool:
-    return (any(term in message for term in _REFERENCE_CUES)
-            or bool(_STOCK_ORDINAL.search(message)))
-
-
-def build_input_review_system(message: str, referent_hint: dict | None = None) -> str:
-    """Attach long rule blocks only when this message needs them."""
+def build_input_review_system(message: str) -> str:
+    """Attach the optional memory rule block only when the message needs it."""
 
     sections = [SECURITY_CORE]
     if _has_memory_cue(message):
         sections.append(MEMORY_REVIEW_RULES)
-    if referent_hint or _has_reference_cue(message):
-        sections.append(REFERENCE_REVIEW_RULES)
     return "\n\n".join(sections)
 
 
@@ -144,10 +123,7 @@ TOOL = {
     "type": "function",
     "function": {
         "name": "submit_input_security_review",
-        "description": (
-            "提交输入安全与研究边界判断。拒绝时可省略 reference_intent 和 memory_intent；"
-            "允许且有回指/条件继承线索时才填写 reference_intent。"
-        ),
+        "description": "提交输入安全与研究边界判断；拒绝时可省略 memory_intent。",
         "parameters": SecurityDecision.model_json_schema(),
     },
 }
@@ -156,8 +132,8 @@ TOOL = {
 def _core_decision(raw: object, message: str) -> SecurityDecision:
     """Validate only the mandatory safety decision.
 
-    Reference and memory hints are optional execution inputs. A malformed hint
-    must not turn an otherwise usable allow/refuse decision into a failed run.
+    Memory intent is an optional execution hint. A malformed hint must not
+    turn an otherwise usable allow/refuse decision into a failed run.
     """
 
     values = raw if isinstance(raw, dict) else {}
@@ -166,7 +142,6 @@ def _core_decision(raw: object, message: str) -> SecurityDecision:
         "signals": values.get("signals", []),
         "reason": values.get("reason", ""),
         "trading_action_quote": values.get("trading_action_quote"),
-        "reference_intent": None,
         "memory_intent": None,
     })
     if decision.decision == "allow" and decision.signals:
@@ -180,22 +155,6 @@ def _core_decision(raw: object, message: str) -> SecurityDecision:
             "not inferred intent"
         )
     return decision
-
-
-def _optional_reference(raw: object, message: str) -> ReferenceIntent | None:
-    """Parse a reference hint best-effort; never fail the safety decision."""
-
-    if not isinstance(raw, dict):
-        return None
-    candidate = dict(raw)
-    if candidate.get("kind") != "analysis":
-        # date_override only changes an analysis scope. Dropping it here keeps
-        # the consumed meaning intact instead of rejecting the whole hint.
-        candidate.pop("date_override", None)
-    try:
-        return validated_reference_intent(candidate, message)
-    except (ValidationError, ValueError):
-        return None
 
 
 def _optional_memory(raw: object, message: str) -> MemoryIntent | None:
@@ -215,14 +174,11 @@ def review_input_security(
     *,
     message: str,
     timeout_seconds: float = 10,
-    referent_hint: dict | None = None,
 ) -> SecurityDecision:
     """Classify one user message; only the core decision may trigger repair."""
 
-    system = build_input_review_system(message, referent_hint)
+    system = build_input_review_system(message)
     payload: dict = {"message": message}
-    if referent_hint:
-        payload["recent_referents"] = referent_hint
     last_error: Exception | None = None
     for attempt in range(2):
         response = provider.generate_messages(
@@ -242,15 +198,9 @@ def review_input_security(
             except (ValidationError, ValueError) as error:
                 last_error = error
             else:
-                hints: dict = {}
-                if decision.decision == "allow":
-                    reference = _optional_reference(raw.get("reference_intent"), message)
-                    memory = _optional_memory(raw.get("memory_intent"), message)
-                    if reference is not None:
-                        hints["reference_intent"] = reference
-                    if memory is not None:
-                        hints["memory_intent"] = memory
-                return decision.model_copy(update=hints)
+                memory = _optional_memory(raw.get("memory_intent"), message) \
+                    if decision.decision == "allow" else None
+                return decision.model_copy(update={"memory_intent": memory})
         if attempt == 0:
             payload["validation_errors"] = [str(last_error)[:240]]
     raise ValueError(f"Input security review failed: {last_error}")

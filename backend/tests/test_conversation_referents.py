@@ -4,7 +4,7 @@ import json
 
 from app.agents.context_builder import build_context
 from app.agents.structured_references import (
-    build_conversation_referents, compact_referent_hint, constraints_from_references,
+    build_conversation_referents, constraints_from_references,
     history_stock_hint, references_from_committed_result, resolve_reference,
 )
 
@@ -199,16 +199,6 @@ def test_multiple_list_groups_still_require_clarification():
     assert resolved["status"] == "clarify"
 
 
-def test_compact_hint_is_bounded_and_includes_analysis():
-    refs = build_conversation_referents("run-1", response(
-        "2026-10-26 1进2：8/68", [calendar(), promotion()],
-    ))
-    hint = compact_referent_hint({"referents": refs})
-    assert hint["analysis"]["tool"] == "daily_board_promotion"
-    assert hint["date_scope"]["previous_trade_date"] == "2026-10-23"
-    assert len(hint["stocks"]) <= 10
-
-
 def test_single_stock_query_does_not_become_a_session_filter():
     refs = references_from_committed_result("run-1", response(
         "| 300750 | 宁德时代 |\n| 600519 | 贵州茅台 |",
@@ -217,7 +207,7 @@ def test_single_stock_query_does_not_become_a_session_filter():
     assert constraints_from_references(refs) == []
 
 
-def test_context_builder_uses_referents_and_exposes_verified_flag():
+def test_context_builder_passes_referents_to_the_model_without_pre_resolving():
     refs = build_conversation_referents("run-1", response(
         "| 代码 | 名称 |\n|---|---|\n| 300750 | 宁德时代 |\n| 600519 | 贵州茅台 |",
         [kline(), activity("600519", "贵州茅台")],
@@ -225,13 +215,13 @@ def test_context_builder_uses_referents_and_exposes_verified_flag():
     result = build_context(
         system_prompt="只使用本轮证据", query="他们近期走势",
         conversation={"referents": refs, "recent_messages": []}, working_messages=[],
-        reference_intent={"kind": "entities", "quote": "他们", "all_entities": True},
     )
-    assert result.clarification is None
-    assert result.resolved_reference["symbols"] == ["300750", "600519"]
-    assert result.resolved_reference["verified"] is True
     payload = json.loads(result.messages[1].content.split("\n", 1)[1])
-    assert payload["resolved_reference"]["symbols"] == ["300750", "600519"]
+    block = payload["conversation_referents"]
+    assert [item["symbol"] for item in block["stocks"]] == ["300750", "600519"]
+    assert block["stock_set"]["ordered_symbols"] == ["300750", "600519"]
+    assert "resolved_reference" not in payload
+    assert result.diagnostics["conversation_referents_present"] is True
 
 
 def _first_board():

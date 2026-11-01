@@ -26,7 +26,7 @@ def test_all_structured_memory_fields_reach_model_as_data():
     assert data["research_context"]["date_scope"] == "2026-10-23"
     assert data["active_constraints"] == ["回答简洁"]
     assert "回答简洁" not in result.messages[0].content
-    assert "不能充当本轮行情证据" in result.messages[0].content
+    assert "不是本轮行情证据" in result.messages[0].content
 
 
 def test_page_context_overrides_named_session_constraints_and_query_stays_last():

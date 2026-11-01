@@ -48,8 +48,7 @@ class RunnerState(TypedDict, total=False):
     conversation: dict
     remaining_seconds: float
     context_diagnostics: dict
-    resolved_reference: dict
-    reference_intent: dict | None
+    reviewed: bool
     memory_request: dict
     memory_action: dict
     memory_owner_revision: int
