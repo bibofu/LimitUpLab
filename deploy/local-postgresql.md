@@ -16,6 +16,8 @@
 
 `backend/.env` 中的业务 URL 指向 `127.0.0.1:55434`。密码只保存在未提交的本地配置或环境变量中。临时测试库使用同一实例上的 `limituplab_test`，禁止把 `LIMITUPLAB_TEST_DATABASE_URL` 指向业务库。
 
+2026-11-01 已核查 Docker 实例：没有遗留的独立恢复演练库或评测库。`limituplab_test` 是当前回归入口，继续保留；其中 3 个无连接、无运行任务引用的 pytest 残留 schema 已在完整备份和实际恢复核验后清理。测试库的 `public`、`plpgsql`、`vector`、所有者和连接设置均保留，4 项 Schema、向量读写及事务回滚验证通过；测试后占用由 175.62 MiB 降至 9.89 MiB。
+
 原生 PostgreSQL 18 集群已于 2026-11-01 退役：确认 55433 端口、进程、服务和计划任务均未使用后，将旧集群全部数据库备份并实际恢复验证，再删除 `.local/postgresql/data`。`.local/postgresql/pgsql` 的工具、历史配置和备份继续保留。当前 `.env` 没有 `LIMITUPLAB_LOCAL_PG_BIN` / `LIMITUPLAB_LOCAL_PG_DATA`，因此 `local_postgresql.py ensure` 只检查外部数据库连接，不启动原生集群；旧 `application.env` 仅作历史资料，不能直接用于当前启动。
 
 ## 启动与检查
@@ -104,6 +106,8 @@ docker exec limituplab-pgvector psql -U limituplab -d limituplab_test -c "CREATE
 2026-11-01 原生集群退役备份位于 `.local/postgresql/backups/native-retirement-20261101/`：5 份数据库 dump、角色与权限 `globals.sql`、SHA-256、原配置和恢复验证记录均保留。已在独立 PostgreSQL 18 集群实际恢复，134 张表、1,039,935 行和 16 个序列，以及库结构、所有者、权限和库配置全部匹配。恢复顺序和验证方法见该目录的 `README.txt`；这些是旧原生集群的恢复点，不能覆盖或代表当前 Docker 业务库。原有三份不同时间点的 PostgreSQL 备份继续保留。
 
 SQLite 迁移源统一保留在 `.local/postgresql/backups/sqlite-before-cutover/limituplab-20261019-143031.sqlite`。已删除与其 SHA-256 完全一致的 `output/pg-migration-source.sqlite`，旧路径到归档的映射为 `output/pg-migration-source.reference.json`，历史报告原文不改写。清理与恢复核验明细位于 `output/cleanup-local-postgresql-20261101/`。
+
+Docker 测试库清理前的完整 dump、SHA-256、逐表指纹和恢复说明保存在 `.local/postgresql/backups/docker-test-cleanup-20261101/`，审计与回归结果位于 `output/cleanup-docker-postgresql-20261101/`。该备份恢复时指定独立空库，不使用会恢复原库名的 `--create`；它只覆盖测试库，不替代业务备份。
 
 当前工作区的长期记忆混合检索、真实 Agent 验收和测试结果记录在 [长期记忆 v2](../docs/Long_Term_Memory_v2.md)。原生 PostgreSQL 切换过程的历史证据仍见 [本地切换验收](../docs/Local_PostgreSQL_Cutover.md)。
 

@@ -33,10 +33,12 @@
 | Agent 与性能验证 | `output/agent-trace-20261022/`、`output/agent-optimization-20261023/`、`output/production-agent-trace-20261023/`、`output/capacity/`；保留不同实验与失败证据 |
 | 记忆与重启恢复 | `output/memory-refactoring/`、`output/memory-referents/`、`tmp/` 中的 Memory 验证原件 |
 | 回归、发布与数据库切换 | `output/validation/`、`output/deployment/`、`output/sqlite-retirement/` 及本地切换记录列出的报告、源归档与备份 |
-| 本次清理审计 | `output/cleanup-20261101/`、`output/cleanup-review-20261101/`、`output/cleanup-ci-20261101/`、`output/cleanup-local-postgresql-20261101/`；保留删除原因、重复文件映射、哈希和验证结果 |
+| 本次清理审计 | `output/cleanup-20261101/`、`output/cleanup-review-20261101/`、`output/cleanup-ci-20261101/`、`output/cleanup-local-postgresql-20261101/`、`output/cleanup-docker-postgresql-20261101/`；保留删除原因、重复文件映射、哈希和验证结果 |
 
 Agent 优化实验的 `first-pass/shared-runs.json` 记录与 `runs/` 共用的九份相同 run；原有两批索引、比较结果及首轮独有记录保留，`compare_runs.py` 按校验值读取共用文件。其他重复截图和记录的原路径到保留路径映射见本次清理清单。
 
 清理不以日期作为唯一依据：不同实验的原始记录、失败样本、源数据、备份校验对及独有未提交草稿均保留。`output/ci-postgresql/` 已于 2026-11-01 单独完成核查：无进程、端口或运行配置引用；冷副本恢复后，两个测试库及 `postgres`、`template1` 均无用户关系和大对象，未发现准备事务或复制槽。原目录及检查副本已清理，原始日志、目录清单和只读核查结果保存在 `output/cleanup-ci-20261101/`。
 
 `.local/postgresql/data` 也已单独退役：旧业务、测试及恢复演练库均已备份并完成实际恢复、逐表内容与结构核验，备份保存在 `.local/postgresql/backups/native-retirement-20261101/`。工具程序、不同时间点的历史备份和迁移源长期归档保留；SQLite 源的重复 `output` 副本已改为路径映射记录。当前 Docker 库及运行配置保持原状，详见[本地 PostgreSQL 手册](../deploy/local-postgresql.md)。
+
+随后核查 Docker `limituplab-pgvector`，没有遗留的独立恢复演练库；保留日常回归库 `limituplab_test`，清理其中 3 个废弃测试 schema 并回收非共享目录表的膨胀空间。清理前完整备份已实际恢复验证，存放于 `.local/postgresql/backups/docker-test-cleanup-20261101/`；本次核验创建的恢复库及测试 schema 均已回收。

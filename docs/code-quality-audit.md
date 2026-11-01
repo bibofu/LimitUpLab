@@ -2,6 +2,15 @@
 
 > 架构更新（2026-10-24）：本文为历史审计记录。旧 `react_runtime`、EvidenceStore、`finish`、`compute_result` 和 Golden/quality 评测代码已删除；当前架构见 [LangChain 集成](LangChain_Integration.md)。
 
+## 2026-11-01：Docker PostgreSQL 遗留测试数据核查与清理
+
+- Docker `limituplab-pgvector` 的集群标识为 `7701372427256148011`，仅有业务库 `limituplab`、当前回归库 `limituplab_test`、维护库 `postgres` 和标准模板；没有遗留的独立恢复演练库或评测库。业务连接及本地有效配置均指向 `limituplab`；测试库无会话，未发现运行中的测试/恢复进程，准备事务、复制槽与订阅均为 0。
+- 测试库有 3 个符合 `backend/tests/database_support.py` 一次性命名规则的残留 schema：一个含 54 张表、14 行和 5 个序列，另外两个为空；无大对象。先导出完整 custom dump，核对 SHA-256，再恢复到唯一命名的独立空库；全部表内容、序列和结构全文哈希一致。备份及恢复指纹保存在 `.local/postgresql/backups/docker-test-cleanup-20261101/`。
+- 清理时再次核对库身份、会话和源内容，短暂禁止测试库新连接；在事务内仅删除 3 个指定 schema，校验剩余关系与扩展符合预期后提交，并在 `finally` 恢复连接。操作遵循官方 [DROP SCHEMA](https://www.postgresql.org/docs/18/sql-dropschema.html) 的依赖删除语义；清理前后 `public` 完整结构哈希一致。
+- 根据官方 [VACUUM](https://www.postgresql.org/docs/18/sql-vacuum.html) 的指定表维护方式，仅对测试库中 9 张膨胀的非共享目录表执行 `VACUUM FULL`，不整理业务表或共享目录表。清理后的实际回归完成后，测试库从 184,153,791 字节（175.62 MiB）降至 10,368,703 字节（9.89 MiB），数据库占用减少 165.73 MiB；此数值不代表 Windows 上 Docker 磁盘镜像立即缩小。
+- 保留测试库 OID、所有者、原连接设置、`public` 和 `vector`。4 项针对性 pytest 全部通过，覆盖 Schema 初始化/迁移限制、向量存储与距离计算、事务回滚；测试结束后只有 `public`，无用户关系，本次恢复校验库也已删除。业务结构哈希与 `/ready` 均正常，41 个既有 dump 文件及 7 个用户改动文件哈希不变。
+- 原始清单、备份恢复指纹、目录表维护清单、pytest 日志/XML 和最终验证保存在 `output/cleanup-docker-postgresql-20261101/`。未修改业务代码或运行配置，未删除任何现有数据库或 Docker 数据卷。
+
 ## 2026-11-01：旧原生 PostgreSQL 集群退役与备份去重
 
 - `.local/postgresql/data` 的旧 PID 18844 不存在，55433 端口无人监听，进程、服务及计划任务引用均为 0；当前 Docker 业务库位于 `127.0.0.1:55434/limituplab`，运行配置没有原生集群路径。旧集群控制状态为异常退出后的 `in production`，未直接启动或修改原目录。
