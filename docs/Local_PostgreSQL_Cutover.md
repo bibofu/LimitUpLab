@@ -74,12 +74,14 @@ SQLite 只作为保留数据与兼容入口。正式切换后的新会话、缓�
 
 | 资料 | 本地路径 |
 | --- | --- |
-| 源一致性副本与导入核对 | `output/pg-migration-source.sqlite`、`output/pg-migration-report.json` |
+| 源一致性副本与导入核对 | `.local/postgresql/backups/sqlite-before-cutover/limituplab-20261019-143031.sqlite`、`output/pg-migration-report.json` |
 | 已验证备份及校验值 | `output/pg-migration-rehearsal-verified.dump`、同名 `.sha256` |
 | 独立恢复逐表核对 | `output/pg-restore-verification.json` |
 | 演练真实问答 | `output/pg-agent-smoke-report.json` |
 | 当时全套回归 | `output/validation/20261019T071057Z-4c654967/summary.json` |
 
-2026-11-01 清理时保留上述资料，重新核对备份 SHA-256；仅移除已正常关闭的 `output/postgresql-runtime/test-cluster` 演练目录及重复安装产物，服务日志保留。`.local/postgresql` 和业务数据库不在清理范围。
+2026-11-01 第一轮清理保留上述资料，重新核对备份 SHA-256；移除已正常关闭的 `output/postgresql-runtime/test-cluster` 演练目录及重复安装产物，服务日志保留。随后单独检查 `.local/postgresql`，确认旧原生集群未运行，对全部数据库完成备份与独立恢复核验后删除旧 `data` 目录；恢复点保存在 `.local/postgresql/backups/native-retirement-20261101/`，当前 Docker 业务库未改动。
+
+重复的 `output/pg-migration-source.sqlite` 与上表长期归档 SHA-256 均为 `add6267482f212a977488628be84e65f2d634ed33d7646a0ba8bf79fd224eb65`，已只保留长期归档；原始报告内路径保持历史原貌，映射见 `output/pg-migration-source.reference.json`。原归档旁的空 WAL 和失效共享内存文件已移除。
 
 早期 `PostgreSQL_Migration_Plan.md` 的重复状态说明和失效操作步骤已移除；原文仍可通过 `git show 70e0c42:docs/PostgreSQL_Migration_Plan.md` 查阅。Schema 基线与数据语义见 [迁移说明](../backend/migrations/README.md)，当前操作见 [部署与恢复手册](../deploy/postgresql.md)，生产切换证据见 [生产验收](../deploy/incidents/2026-10-19-postgresql-cutover.md)。数据库切换、全局写锁优化与多实例生产验收是不同事项，历史单实例验证不证明后两者完成。

@@ -2,6 +2,15 @@
 
 > 架构更新（2026-10-24）：本文为历史审计记录。旧 `react_runtime`、EvidenceStore、`finish`、`compute_result` 和 Golden/quality 评测代码已删除；当前架构见 [LangChain 集成](LangChain_Integration.md)。
 
+## 2026-11-01：旧原生 PostgreSQL 集群退役与备份去重
+
+- `.local/postgresql/data` 的旧 PID 18844 不存在，55433 端口无人监听，进程、服务及计划任务引用均为 0；当前 Docker 业务库位于 `127.0.0.1:55434/limituplab`，运行配置没有原生集群路径。旧集群控制状态为异常退出后的 `in production`，未直接启动或修改原目录。
+- 对 3,087 个数据文件记录 SHA-256，在隔离冷副本上恢复并只读核查。旧业务库有 348,284 行，恢复演练库 691,640 行，测试库 11 行，另有空 Agent 测试库与 `postgres`；这些数据均保留到新备份。无大对象、准备事务、复制槽、非持久表或外部表空间，标准模板无用户关系。
+- 依照 PostgreSQL 官方 [pg_dump](https://www.postgresql.org/docs/18/app-pgdump.html)、[pg_dumpall](https://www.postgresql.org/docs/18/app-pg-dumpall.html) 和 [pg_restore](https://www.postgresql.org/docs/18/app-pgrestore.html)，导出 5 份数据库归档及全局角色配置，保存 SHA-256 和原配置。实际恢复到第二套隔离集群，134 张表、1,039,935 行的逐行 SHA-256 多重集、16 个序列均一致；结构导出只去除随机 `restrict` 标记后全文哈希一致，包含库配置、所有者、权限和约束。恢复点位于 `.local/postgresql/backups/native-retirement-20261101/`。
+- 两套检查集群正常关闭、原目录逐文件哈希仍一致后，删除旧数据目录及检查副本。三份原有 PostgreSQL 备份均核对 SHA-256 与归档可读性，各有不同内容，继续保留；`.local/postgresql/pgsql` 工具、历史配置和日志保留。
+- SQLite 迁移源与 `output/pg-migration-source.sqlite` 字节完全相同，只保留 `.local/postgresql/backups/sqlite-before-cutover/` 的长期归档；删除空 WAL、失效 SHM 和重复 `output` 副本，写入 `output/pg-migration-source.reference.json`，更新资料索引，不改写原始验证报告。
+- 删除原有文件共 3,090 个、1,996.86 MiB；扣除约 46.30 MiB 新备份及审计记录，净释放约 1.90 GiB，临时检查副本不重复计入。1,569 个保留文件在删除前后哈希一致，业务 `/ready` 始终为 `status=ok, database=postgresql`，原有 7 个用户改动文件指纹不变。本轮不修改业务代码；审计清单、源/恢复指纹及验证结果位于 `output/cleanup-local-postgresql-20261101/`。
+
 ## 2026-11-01：异常退出的 CI 测试集群核查与清理
 
 - 原集群为 `output/ci-postgresql/data`，旧 PID 14936 不存在，49988 端口无人监听，`pg_ctl status` 返回未运行；进程、Windows 服务及计划任务引用均为 0。当前应用连接为独立的 `127.0.0.1:55434/limituplab`，本地配置没有引用旧目录或端口。
