@@ -493,3 +493,12 @@
 - 原因：`market_event_pool` 和 `limit_up_events` 的工具描述把 `unsealed` 与 `intraday_broken` 写成“不同集合”，没有说明前者是后者的子集；`_summarize_event_scope` 只有开板总数，没有回封拆分；`first_board_ratings` 的摘要按 symbols 过滤后的候选数生成，未保留快照候选数、请求标的和合格池计数。
 - 修复：工具描述和 notes 改为 `intraday_broken = 回封 + 未回封`、`unsealed` 是 `intraday_broken` 的子集，禁止相加；市场日聚合新增 `resealed_count`，摘要输出“开板 96（其中回封 63、未回封 33）”；首板评分摘要在指定 symbols 时输出快照候选数、请求标的、命中/未命中，并在来源截断时直接给出评分输入、硬筛排除、合格池、未保存候选数，明确“未保存不是硬筛排除、未命中不代表不合格”。
 - 验证：复验会话 `chat_f61861ba5ef44f8ea9e7f170cbbe32b8` 的 Q1 明确写出 `96 = 63 + 33`、未回封是开板子集；Q2 列出 149/59/90/10/80，并说明 `candidate_pool_complete=false`、`source_truncated=true`，未推断两只股票不合格。新增开板拆分、symbol 命中/未命中摘要、快照计数测试；后端全量 2206 passed、3 skipped、22 subtests，前端 266 passed、构建通过。
+
+## 2026-11-05：确定性工具 profile 无法在运行中发现缺失能力
+
+- 原表现：`resolve_tool_profile` 在 run 开始前固定工具集。“复盘今天，顺便介绍一下宁德时代这家公司”只命中 `review`（交易日历、市场聚合、涨停事件、晋级），看不到 `stock_profile`；“复盘今天，顺便看看宁德时代最新的营收和净利润”也看不到 `stock_financials`。模型只能让用户补问，或把问题落到 `general`。
+- 原因：只有预注册过滤，没有 LangChain Deep Agents 式的运行时工具发现；`search_tools` 不存在，工具定义在 `AgentRunner.__init__` 固定，不能按轮次扩展。
+- 修复：新增 `LIMITUPLAB_PROGRESSIVE_TOOLS=off|hybrid|full`（默认 off）。`hybrid` 保留确定性 profile 作为初始集合，追加 `search_tools`；模型搜索后，`tools()` 把匹配项写入 `discovered_tools`，下一轮 `_definitions_for(state)` 扩展工具定义。搜索按名称、描述、notes 和中文能力别名评分；`full` 只从 `search_tools`/`read_tool_result` 起步。`discovered_tools` 进入 RunnerState，断点恢复后继续生效。活动业务工具上限默认 20，搜索单次默认返回 4 个、最多 8 个。
+- 预算修正：初次真实运行发现 `search_tools` 和 `read_tool_result` 会占用 8 次数据查询额度，导致第 9 个业务工具报“工具执行额度耗尽”。现在数据工具、元工具分开计数：`MAX_TOOL_CALLS=8`、`MAX_META_CALLS=8`、`MAX_SEARCH_CALLS=3`；搜索和回执读取不再挤占数据查询额度。
+- 验证：`hybrid` 会话 `chat_594d2fc7d8294d0e814c0e2c5afcebd9` 首次确认两条问题分别调用 `search_tools` 后发现 `stock_profile`、`stock_financials`，但搜索占用数据额度导致后续工具失败。预算修正后复验会话 `chat_7347f73f69e5445593e5b955893d8ddf`：Q1 调用 `search_tools` 后取得宁德时代公司资料；Q2 调用 `search_tools` 后取得营收、归母净利润和单季数据；两组工具调用均未再出现额度耗尽。新增 `test_progressive_tools.py` 覆盖搜索排序、`already_visible`、hybrid/off/full 初始集合、稳定定义顺序、活动上限、搜索不占数据额度、参数校验；新增 durable 测试确认 `search_tools` observation 不会被回执引用替换、恢复后仍能发现工具。后端全量 2217 passed、3 skipped、22 subtests，前端 266 passed、构建通过。
+- 边界：搜索是关键词评分，不是向量检索或独立小模型；初始 profile 仍是关键词规则，股票名称未命中时可能先落到 `general`；默认 off，需显式设置环境变量启用。设计说明见 `docs/Progressive_Tool_Disclosure.md`。

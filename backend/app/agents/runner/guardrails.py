@@ -4,6 +4,8 @@ from __future__ import annotations
 
 MAX_MODEL_ROUNDS = 6
 MAX_TOOL_CALLS = 8
+MAX_META_CALLS = 8
+MAX_SEARCH_CALLS = 3
 DEADLINE_SECONDS = 90
 
 # These phrases are review signals, not verdicts: negatives, quotations and

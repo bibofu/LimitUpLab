@@ -20,6 +20,8 @@ from app.agents.run_lifecycle import CURRENT_CONTROL
 from app.agents.context_builder import CONTEXT_VERSION
 from app.agents.runtime_errors import RecoverableRunError, RunPauseRequested
 from app.agents.run_pause import PausedRunError, PausedRunOutcome
+from app.agents.progressive_tools import SEARCH_TOOLS_TOOL
+from app.agents.result_paging import READ_RESULT_TOOL
 from app.agents.runner.runner import RunnerState
 from app.agents.runner.result import RunnerResult
 from app.agents.runner.security import review_input_security
@@ -260,8 +262,11 @@ def _tool(state, deps):
         update = runner.tools({**state, "pending": state["pending"][:1]})
         if update.get("tool_messages") and not update.get("done"):
             value = update["tool_messages"][-1]
-            if (state.get("tool_count", 0) < MAX_TOOL_CALLS
-                    and value.get("error_type") != "UncertainExecution"):
+            if (
+                state.get("tool_count", 0) < MAX_TOOL_CALLS
+                and state["pending"][0]["name"] not in {SEARCH_TOOLS_TOOL, READ_RESULT_TOOL}
+                and value.get("error_type") != "UncertainExecution"
+            ):
                 update["tool_messages"][-1] = {
                     "result_ref": state["pending"][0]["id"], "name": state["pending"][0]["name"],
                     "status": value.get("status"), "summary": value.get("summary"),
@@ -477,7 +482,8 @@ class DurableRuntime:
                        "reference_date": runner.reference_date.isoformat(), "pause_next_node": "", "pause_revision": 0,
                        "current_query": runner.request.message, "conversation": conversation,
                        "messages": [], "pending": [], "tool_calls": [], "tool_statuses": [],
-                       "tool_messages": [], "model_rounds": 0, "tool_count": 0, "done": False,
+                       "tool_messages": [], "discovered_tools": [],
+                       "model_rounds": 0, "tool_count": 0, "done": False,
                        "answer": "", "status": "", "stop_reason": "", "error": "",
                        "answer_repair": False, "compliance_reviewed": False,
                        "context_diagnostics": {}, "reviewed": False,

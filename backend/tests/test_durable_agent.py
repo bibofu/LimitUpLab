@@ -102,6 +102,38 @@ def tool_call(call_id="tool-1", days=1):
     return call("limit_up_events", {"recent_trade_days": days}, call_id)
 
 
+def test_search_tool_observation_is_not_replaced_by_a_receipt_reference(world):
+    request, control, history = world.start("最新财经新闻有哪些")
+    provider = ScriptedProvider([
+        input_review(),
+        call("search_tools", {"query": "财务"}, "search-1"),
+        AIMessage(content="已取得可用工具说明。"),
+    ])
+    tools, _ = fixed_registry()
+    execution = AgentRunner(
+        request, tools, provider, history, progressive_mode="hybrid",
+    )
+
+    async def scenario():
+        async with runtime_for(world) as runtime:
+            result = await runtime.run(execution, control)
+            assert result.status == "answered"
+            search_call = next(
+                item for item in provider.options
+                if any(tool["function"]["name"] == "search_tools" for tool in item["tools"])
+            )
+            following = provider.options[provider.options.index(search_call) + 1]
+            names = {tool["function"]["name"] for tool in following["tools"]}
+            assert "stock_financials" in names
+            observation = next(
+                json.loads(item.content) for item in provider.calls[2]
+                if isinstance(item, ToolMessage) and item.name == "search_tools"
+            )
+            assert observation["rows"]
+            assert "result_ref" not in observation
+    run_async(scenario())
+
+
 def test_input_review_tool_and_answer_have_native_checkpoints_before_delivery(world):
     request, control, history = world.start()
     provider = ScriptedProvider([input_review(), tool_call(), list_answer()])

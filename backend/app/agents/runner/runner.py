@@ -18,13 +18,23 @@ from app.agents.run_lifecycle import CURRENT_CONTROL
 from app.agents.runner.gateway import BusinessToolGateway
 from app.agents.runner.guardrails import (
     DEADLINE_SECONDS,
+    MAX_META_CALLS,
     MAX_MODEL_ROUNDS,
+    MAX_SEARCH_CALLS,
     MAX_TOOL_CALLS,
     REFUSAL,
     derived_status,
     requires_compliance_review,
 )
 from app.agents.tool_profiles import ToolProfile, resolve_tool_profile
+from app.agents.progressive_tools import (
+    SEARCH_TOOLS_DEFINITION,
+    SEARCH_TOOLS_TOOL,
+    SearchToolsRequest,
+    resolve_max_active_tools,
+    resolve_progressive_tools_mode,
+    search_tool_catalog,
+)
 from app.agents.runner.answer_delivery import AnswerDelivery
 from app.agents.runner.prompt import build_system_prompt
 from app.agents.runner.result import RunnerResult
@@ -64,6 +74,7 @@ class RunnerState(TypedDict, total=False):
     tool_calls: list[str]
     tool_statuses: list[str]
     tool_messages: list[dict[str, Any]]
+    discovered_tools: list[str]
     model_rounds: int
     tool_count: int
     error: str
@@ -87,11 +98,18 @@ class AgentRunner:
         progress=None,
         tool_profile: ToolProfile | None = None,
         answer_revision_base: int = 0,
+        progressive_mode: str | None = None,
+        max_active_tools: int | None = None,
     ):
         self.request = request
         self.history = history or []
         self.provider = provider
         self.gateway = BusinessToolGateway(registry)
+        self.progressive_mode = resolve_progressive_tools_mode(progressive_mode)
+        self.max_active_tools = (
+            resolve_max_active_tools(str(max_active_tools))
+            if max_active_tools is not None else resolve_max_active_tools()
+        )
         profile = tool_profile or resolve_tool_profile(request)
         enabled = set(getattr(registry, "enabled_tool_names", profile.tools))
         selected = profile.tools & enabled
@@ -99,11 +117,19 @@ class AgentRunner:
             selected = enabled
             profile = ToolProfile("full", frozenset(selected))
         self.tool_profile_name = profile.name
-        self.tool_names = frozenset(selected)
-        self.definitions = [
-            *business_definitions(self.gateway, allowed=self.tool_names),
-            READ_RESULT_DEFINITION,
-        ]
+        self.searchable_tool_names = frozenset(enabled)
+        # Full mode starts from the meta-tools only; hybrid keeps the
+        # deterministic profile and discovers the rest on demand.
+        self.initial_tool_names = (
+            frozenset() if self.progressive_mode == "full" else frozenset(selected)
+        )
+        self.initial_business_order = tuple(
+            name for name in self.gateway.structured
+            if name in self.initial_tool_names
+        )
+        self.tool_names = self.initial_tool_names
+        self._active_discovered: list[str] = []
+        self.definitions = self._build_definitions(())
         self.freeze_reference_date(current_query_reference_date())
         self.deadline = perf_counter() + deadline_seconds
         self.started = perf_counter()
@@ -117,6 +143,33 @@ class AgentRunner:
             self.definitions, ensure_ascii=False, separators=(",", ":"),
         ))
 
+    def _build_definitions(self, discovered: tuple[str, ...]) -> list[dict[str, Any]]:
+        """Keep an ordered, cache-friendly active set instead of the full catalog."""
+
+        active = [name for name in self.initial_business_order if name in self.gateway.structured]
+        for name in discovered:
+            if (
+                name in self.searchable_tool_names
+                and name in self.gateway.structured
+                and name not in active
+            ):
+                active.append(name)
+        definitions = []
+        if self.progressive_mode != "off":
+            definitions.append(SEARCH_TOOLS_DEFINITION)
+        definitions.extend(business_definitions(self.gateway, allowed=active))
+        definitions.append(READ_RESULT_DEFINITION)
+        return definitions
+
+    def _definitions_for(self, state: RunnerState) -> list[dict[str, Any]]:
+        if self.progressive_mode == "off":
+            return self.definitions
+        discovered = tuple(
+            name for name in state.get("discovered_tools", [])
+            if name in self.searchable_tool_names
+        )
+        return self._build_definitions(discovered)
+
     def freeze_reference_date(self, reference_date):
         """A resumed request keeps the date against which its intent was read."""
         self.reference_date = reference_date
@@ -125,6 +178,12 @@ class AgentRunner:
         skill = resolve_agent_skill(self.request)
         if skill:
             self.system_prompt = f"{self.system_prompt}\n\n{skill}"
+        if self.progressive_mode != "off":
+            self.system_prompt += (
+                "\n\n工具发现规则：当前工具列表可能不完整。缺少所需能力时，先调用 "
+                "search_tools 搜索工具名、能力或关键词；匹配工具会在下一轮自动加入。"
+                "不要猜测未列出的工具名，也不要把搜索工具当成市场数据查询。"
+            )
 
     def enable_answer_delivery(self, emit) -> None:
         """Attach the graph's candidate-answer channel to this runner."""
@@ -153,10 +212,11 @@ class AgentRunner:
         self.delivery.begin_round()
         try:
             repairing = state.get("answer_repair", False)
-            self._record_usage_context(state, repairing)
+            definitions = [] if repairing else self._definitions_for(state)
+            self._record_usage_context(state, repairing, definitions)
             response = self.provider.generate_messages(
                 state["messages"],
-                [] if repairing else self.definitions,
+                definitions,
                 timeout_seconds=max(1, min(35, self.deadline - perf_counter())),
                 max_tokens=4096,
                 tool_choice="none" if repairing else "auto",
@@ -255,7 +315,12 @@ class AgentRunner:
             "done": True,
         }
 
-    def _record_usage_context(self, state: RunnerState, repairing: bool) -> None:
+    def _record_usage_context(
+        self,
+        state: RunnerState,
+        repairing: bool,
+        definitions: list[dict[str, Any]],
+    ) -> None:
         """Attach the context cost of this round to the next provider call."""
 
         tracker = current_llm_usage()
@@ -264,8 +329,12 @@ class AgentRunner:
         tracker.set_context(
             stage="length_repair" if repairing else "agent",
             round=state.get("model_rounds", 0) + 1,
-            tool_count=0 if repairing else len(self.definitions),
-            tool_definition_chars=0 if repairing else self.definition_chars,
+            tool_count=0 if repairing else len(definitions),
+            tool_definition_chars=0 if repairing else len(json.dumps(
+                definitions, ensure_ascii=False, separators=(",", ":"),
+            )),
+            progressive_mode=self.progressive_mode,
+            discovered_tool_count=len(state.get("discovered_tools", [])),
             message_chars=sum(
                 _message_chars(item) for item in state.get("messages", [])
             ),
@@ -283,15 +352,40 @@ class AgentRunner:
         tool_calls = list(state.get("tool_calls", []))
         tool_statuses = list(state.get("tool_statuses", []))
         tool_messages = list(state.get("tool_messages", []))
+        discovered = list(state.get("discovered_tools", []))
+        self._active_discovered = discovered
         tool_count = state.get("tool_count", 0)
         if self.progress:
             self.progress("tools", f"正在执行 {len(state['pending'])} 项数据查询")
+        meta_tools = {SEARCH_TOOLS_TOOL, READ_RESULT_TOOL}
         for call in state["pending"]:
-            if tool_count >= MAX_TOOL_CALLS:
+            is_meta = call["name"] in meta_tools
+            is_search = call["name"] == SEARCH_TOOLS_TOOL
+            meta_count = sum(1 for name in tool_calls if name in meta_tools)
+            if is_search and tool_calls.count(SEARCH_TOOLS_TOOL) >= MAX_SEARCH_CALLS:
+                value = {"status": "error", "error": "Tool search budget exhausted"}
+            elif is_meta and meta_count >= MAX_META_CALLS:
+                value = {"status": "error", "error": "Tool meta-operation budget exhausted"}
+            elif not is_meta and tool_count >= MAX_TOOL_CALLS:
                 value = {"status": "error", "error": "Tool execution budget exhausted"}
             else:
-                tool_count += 1
+                # Discovery and receipt paging are meta-operations; they must
+                # not consume one of the limited data-query slots.
+                if not is_meta:
+                    tool_count += 1
                 value = self.execute(call)
+            if call["name"] == SEARCH_TOOLS_TOOL:
+                for row in value.get("rows", []) or []:
+                    name = row.get("name") if isinstance(row, dict) else None
+                    if (
+                        name in self.searchable_tool_names
+                        and name not in self.initial_tool_names
+                        and name not in discovered
+                        and len(set(self.initial_tool_names) | set(discovered))
+                        < self.max_active_tools
+                    ):
+                        discovered.append(name)
+                        self._active_discovered = discovered
             tool_calls.append(call["name"])
             tool_statuses.append(value.get("status", "error"))
             tool_messages.append({**value, "name": call["name"]})
@@ -314,6 +408,7 @@ class AgentRunner:
             "tool_calls": tool_calls,
             "tool_statuses": tool_statuses,
             "tool_messages": tool_messages,
+            "discovered_tools": discovered,
             "tool_count": tool_count,
         }
 
@@ -328,9 +423,64 @@ class AgentRunner:
             span.finish(status=value.get("status", "error"), output=value)
             return value
 
+    def _search_tools(self, request: SearchToolsRequest) -> dict[str, Any]:
+        """Search the enabled catalog and admit only tools that fit the active budget."""
+
+        catalog = {
+            name: {
+                "description": self.gateway.contracts[name].description,
+                "notes": self.gateway.contracts[name].notes,
+                "time_mode": self.gateway.contracts[name].time_mode,
+            }
+            for name in self.searchable_tool_names
+            if name in self.gateway.contracts
+        }
+        active = set(self.initial_tool_names) | set(self._active_discovered)
+        remaining = max(0, self.max_active_tools - len(active))
+        rows = search_tool_catalog(
+            catalog, request.query, limit=request.limit, active_names=active,
+        )
+        visible = [row for row in rows if row["already_visible"]]
+        new = [row for row in rows if not row["already_visible"]]
+        admitted = new[:remaining]
+        selected = [*visible, *admitted][: request.limit]
+        if not selected:
+            if rows and not admitted and remaining <= 0:
+                summary = (
+                    f"找到 {len(rows)} 个匹配工具，但活动工具已达上限"
+                    f"（{self.max_active_tools}），本次未加入新工具。"
+                )
+                status = "ok"
+            else:
+                summary = "没有匹配的工具；请换关键词，或使用当前已可见工具。"
+                status = "empty"
+        else:
+            names = "、".join(row["name"] for row in selected)
+            summary = f"找到 {len(selected)} 个工具：{names}。"
+            if selected and not admitted and new and remaining <= 0:
+                summary += " 活动工具已达上限，本次未加入新工具。"
+            elif len(admitted) < len(new):
+                summary += f" 仅加入前 {len(admitted)} 个，其余受活动工具上限限制。"
+            status = "ok"
+        return {
+            "name": SEARCH_TOOLS_TOOL,
+            "status": status,
+            "summary": summary,
+            "query": request.query,
+            "rows": selected,
+            "row_count": len(selected),
+            "active_tool_count": len(active),
+            "max_active_tools": self.max_active_tools,
+        }
+
     # Validate and execute one call; validation and provider failures stay observations.
     def _execute(self, call: dict[str, Any]) -> dict[str, Any]:
         try:
+            if call["name"] == SEARCH_TOOLS_TOOL:
+                if self.progressive_mode == "off":
+                    raise ValueError("Tool search is disabled for this run")
+                request = SearchToolsRequest.model_validate(call.get("args") or {})
+                return self._search_tools(request)
             if call["name"] == READ_RESULT_TOOL:
                 from app.services.agent_result_reader import read_owned_result
                 control = CURRENT_CONTROL.get()
