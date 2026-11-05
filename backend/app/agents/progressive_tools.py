@@ -94,7 +94,7 @@ SEARCH_TOOLS_DEFINITION = {
 def resolve_progressive_tools_mode(value: str | None = None) -> str:
     """Resolve off/hybrid/full; invalid settings fail explicitly."""
 
-    raw = (value if value is not None else os.getenv(PROGRESSIVE_TOOLS_ENV, "off"))
+    raw = (value if value is not None else os.getenv(PROGRESSIVE_TOOLS_ENV, "hybrid"))
     normalized = str(raw).strip().lower()
     aliases = {
         "0": "off",

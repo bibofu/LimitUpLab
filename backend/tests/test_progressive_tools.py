@@ -94,7 +94,9 @@ def test_search_catalog_returns_empty_for_unmatched_query():
     assert search_tool_catalog(CATALOG, "完全不存在的词") == []
 
 
-def test_progressive_mode_and_budget_validation():
+def test_progressive_mode_and_budget_validation(monkeypatch):
+    monkeypatch.delenv("LIMITUPLAB_PROGRESSIVE_TOOLS", raising=False)
+    assert resolve_progressive_tools_mode() == "hybrid"
     assert resolve_progressive_tools_mode("off") == "off"
     assert resolve_progressive_tools_mode("true") == "hybrid"
     assert resolve_progressive_tools_mode("full") == "full"

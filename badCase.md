@@ -498,10 +498,10 @@
 
 - 原表现：`resolve_tool_profile` 在 run 开始前固定工具集。“复盘今天，顺便介绍一下宁德时代这家公司”只命中 `review`（交易日历、市场聚合、涨停事件、晋级），看不到 `stock_profile`；“复盘今天，顺便看看宁德时代最新的营收和净利润”也看不到 `stock_financials`。模型只能让用户补问，或把问题落到 `general`。
 - 原因：只有预注册过滤，没有 LangChain Deep Agents 式的运行时工具发现；`search_tools` 不存在，工具定义在 `AgentRunner.__init__` 固定，不能按轮次扩展。
-- 修复：新增 `LIMITUPLAB_PROGRESSIVE_TOOLS=off|hybrid|full`（默认 off）。`hybrid` 保留确定性 profile 作为初始集合，追加 `search_tools`；模型搜索后，`tools()` 把匹配项写入 `discovered_tools`，下一轮 `_definitions_for(state)` 扩展工具定义。搜索按名称、描述、notes 和中文能力别名评分；`full` 只从 `search_tools`/`read_tool_result` 起步。`discovered_tools` 进入 RunnerState，断点恢复后继续生效。活动业务工具上限默认 20，搜索单次默认返回 4 个、最多 8 个。
+- 修复：新增 `LIMITUPLAB_PROGRESSIVE_TOOLS=off|hybrid|full`（默认 hybrid）。`hybrid` 保留确定性 profile 作为初始集合，追加 `search_tools`；模型搜索后，`tools()` 把匹配项写入 `discovered_tools`，下一轮 `_definitions_for(state)` 扩展工具定义。搜索按名称、描述、notes 和中文能力别名评分；`full` 只从 `search_tools`/`read_tool_result` 起步。`discovered_tools` 进入 RunnerState，断点恢复后继续生效。活动业务工具上限默认 20，搜索单次默认返回 4 个、最多 8 个。
 - 预算修正：初次真实运行发现 `search_tools` 和 `read_tool_result` 会占用 8 次数据查询额度，导致第 9 个业务工具报“工具执行额度耗尽”。现在数据工具、元工具分开计数：`MAX_TOOL_CALLS=8`、`MAX_META_CALLS=8`、`MAX_SEARCH_CALLS=3`；搜索和回执读取不再挤占数据查询额度。
 - 验证：`hybrid` 会话 `chat_594d2fc7d8294d0e814c0e2c5afcebd9` 首次确认两条问题分别调用 `search_tools` 后发现 `stock_profile`、`stock_financials`，但搜索占用数据额度导致后续工具失败。预算修正后复验会话 `chat_7347f73f69e5445593e5b955893d8ddf`：Q1 调用 `search_tools` 后取得宁德时代公司资料；Q2 调用 `search_tools` 后取得营收、归母净利润和单季数据；两组工具调用均未再出现额度耗尽。新增 `test_progressive_tools.py` 覆盖搜索排序、`already_visible`、hybrid/off/full 初始集合、稳定定义顺序、活动上限、搜索不占数据额度、参数校验；新增 durable 测试确认 `search_tools` observation 不会被回执引用替换、恢复后仍能发现工具。后端全量 2217 passed、3 skipped、22 subtests，前端 266 passed、构建通过。
-- 边界：搜索是关键词评分，不是向量检索或独立小模型；初始 profile 仍是关键词规则，股票名称未命中时可能先落到 `general`；默认 off，需显式设置环境变量启用。设计说明见 `docs/Progressive_Tool_Disclosure.md`。
+- 边界：搜索是关键词评分，不是向量检索或独立小模型；初始 profile 仍是关键词规则，股票名称未命中时可能先落到 `general`；默认 hybrid，需要完全确定性行为时显式设置 `off`。设计说明见 `docs/Progressive_Tool_Disclosure.md`。
 
 ## 2026-11-05：渐进式工具披露的多场景基准与公司名搜索修正
 
@@ -514,5 +514,6 @@
   - `full`：命中率 83.3%，平均 3.75 次调用，平均 prompt 15,840 token，省 47.3%；本轮出现一次 `OpenAITimeoutError`。
   - `all-tools`：命中率 100%，平均 2.50 次调用，平均 prompt 30,081 token，基线。
 - 工具 schema 单独探针（同一短消息）：无工具 13 token；`stock` 6 工具 3,283 token（+3,270）；`review` 4 工具 2,503 token（+2,490）；全量 25 工具 10,753 token（+10,740）。
-- 结论：`hybrid` 在命中率上与全量工具持平，prompt token 约少一半，代价是平均多 0.5 次模型调用；`deterministic` 更省但漏长尾组合；`full` 起步过小，调用次数和超时风险都更高。
+- 第二次重复矩阵：`hybrid` 仍为 100% 命中，平均 3.08 次模型调用、15,541 prompt token，相对全量 27,964 省 44.4%；`deterministic` 11,552（省 55.1%）、命中率 83.3%；`full` 15,741（省 43.7%）、命中率 91.7%；`all-tools` 27,964、命中率 100%。两次结果支持把默认值从 `off` 改为 `hybrid`。
+- 结论：`hybrid` 在命中率上与全量工具持平，prompt token 约少 44–50%，代价是平均多 0.5–0.75 次模型调用；`deterministic` 更省但漏长尾组合；`full` 起步过小，调用次数和超时风险都更高。
 - 边界：基准是 selection-only，不执行真实业务工具；每组合单次运行，LLM 有随机性。结果用于比较模式，不替代浏览器端业务验收。
