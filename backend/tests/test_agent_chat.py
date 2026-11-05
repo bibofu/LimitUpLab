@@ -106,6 +106,7 @@ class AgentChatTest(unittest.TestCase):
 
         summary = aggregate
         self.assertEqual(summary["opened_count"], 2)
+        self.assertEqual(summary["resealed_count"], 1)
         self.assertEqual(summary["closed_count"], 2)
         self.assertEqual(summary["touched_count"], 3)
         self.assertAlmostEqual(summary["opened_rate"], 2 / 3, places=4)

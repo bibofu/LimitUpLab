@@ -1186,6 +1186,49 @@ class AgentToolRegistry:
             if top
             else "暂无入池候选"
         )
+        candidate_pool_complete = (
+            False if requested_symbols or source_truncated
+            else None if persisted_snapshot else True
+        )
+        snapshot_label = (
+            "已固化首板评级快照" if persisted_snapshot else "重新计算的首板评级候选"
+        )
+        if requested_symbols:
+            symbol_text = "、".join(requested_symbols[:5])
+            if len(requested_symbols) > 5:
+                symbol_text += "等"
+            if top is not None:
+                summary = (
+                    f"{ratings.trade_date.isoformat()} {snapshot_label}"
+                    f"共{snapshot_candidate_count}只候选；指定标的{symbol_text}"
+                    f"命中{len(ratings.candidates)}只，{top_summary}。"
+                )
+            else:
+                summary = (
+                    f"{ratings.trade_date.isoformat()} {snapshot_label}"
+                    f"共{snapshot_candidate_count}只候选；指定标的{symbol_text}未命中。"
+                    "未命中只表示不在本次快照中，不代表该标的不合格。"
+                )
+        else:
+            summary = (
+                f"{ratings.trade_date.isoformat()} {snapshot_label}"
+                f"返回{len(ratings.candidates)}只，{top_summary}。"
+            )
+        if source_truncated:
+            eligible_text = (
+                f"合格池{recorded_eligible_count}只"
+                if recorded_eligible_count is not None else "合格池数量未证明"
+            )
+            not_selected_text = (
+                f"，其中{not_selected_count}只未保存"
+                if not_selected_count is not None else ""
+            )
+            summary += (
+                f" 来源快照记录评分输入{ratings.universe_count}只、"
+                f"硬筛排除{filtered_out_count}只、{eligible_text}；"
+                f"快照仅保留{snapshot_candidate_count}只候选{not_selected_text}，"
+                "未保存候选不是硬筛排除。"
+            )
         intelligence = _recommendation_intelligence_by_symbol(
             self.first_board_repository.database_url,
             strategy="relay",
@@ -1205,8 +1248,7 @@ class AgentToolRegistry:
             "recorded_eligible_candidate_count": recorded_eligible_count,
             "not_selected_count": not_selected_count,
             "source_truncated": source_truncated,
-            "candidate_pool_complete": (False if requested_symbols or source_truncated
-                                        else None if persisted_snapshot else True),
+            "candidate_pool_complete": candidate_pool_complete,
             "scope_note": (
                 "返回历史已固化候选快照，不能称为完整评级合格池。snapshot_top_limit来自固化批次记录；"
                 "recorded_eligible_candidate_count是快照记录的universe_count减filtered_out_count，"
@@ -1246,11 +1288,7 @@ class AgentToolRegistry:
                 "symbols": requested_symbols or None,
             },
             output=ratings,
-            summary=(
-                f"{ratings.trade_date.isoformat()} {'已固化首板评级快照' if persisted_snapshot else '重新计算的首板评级候选'}"
-                f"返回{len(ratings.candidates)}只，"
-                f"{top_summary}。"
-            ),
+            summary=summary,
             trace_output=trace_output,
         )
 
@@ -1491,9 +1529,10 @@ class AgentToolRegistry:
                 f"{target_date.isoformat()} 涨停触及 {summary_payload['touched_count']} 只，"
                 f"收盘封住 {summary_payload['closed_count']} 只，"
                 f"开板 {summary_payload['opened_count']} 只"
-                f"（{_rate_text(summary_payload['opened_rate'])}），"
-                f"未回封 {summary_payload['unsealed_count']} 只"
-                f"（{_rate_text(summary_payload['unsealed_rate'])}），"
+                f"（其中回封 {summary_payload['resealed_count']} 只、"
+                f"未回封 {summary_payload['unsealed_count']} 只；"
+                f"开板率 {_rate_text(summary_payload['opened_rate'])}，"
+                f"未回封率 {_rate_text(summary_payload['unsealed_rate'])}），"
                 f"最高 {summary_payload['max_board_height']} 板。"
             )
         else:
@@ -1590,6 +1629,7 @@ class AgentToolRegistry:
         matched_count = len(target_events)
         unique_stock_count = len({event.symbol for event in target_events})
         event_summary = None
+        daily_summaries: list[dict[str, Any]] = []
         if len(selected_dates) == 1:
             event_summary = _summarize_event_scope(scope_events, selected_dates[0])
             event_summary.update(
@@ -1601,10 +1641,40 @@ class AgentToolRegistry:
                     "status and keyword filters; filtered_count is the returned row count."
                 ),
             )
+        elif len(selected_dates) > 1:
+            for selected_date in selected_dates:
+                day_events = [
+                    event for event in self.events
+                    if event.trade_date == selected_date
+                ]
+                day_scope = filter_limit_up_events(
+                    day_events,
+                    board_height=None,
+                    min_board_height=None,
+                    market=effective_market,
+                    event_status="all",
+                    query=None,
+                    highest_only=False,
+                )
+                summary = _summarize_event_scope(day_scope, selected_date)
+                summary.update(
+                    filtered_count=sum(
+                        1 for event in target_events
+                        if event.trade_date == selected_date
+                    ),
+                    scope="market_day_all_status",
+                    scope_note=(
+                        "All touched events for the selected date and market before "
+                        "board/status/keyword filters; filtered_count counts rows after "
+                        "those filters for that date."
+                    ),
+                )
+                daily_summaries.append(summary)
         sector_summary, unclassified_event_count = group_limit_up_events(
             target_events, group_by=group_by, limit=limit,
         )
-        target_events = target_events[: max(1, min(limit, 100))]
+        limited_events = target_events[: max(1, min(limit, 100))]
+        truncated = len(limited_events) < matched_count
         if effective_recent_days == 1 and trade_date is not None:
             trade_date_text = trade_date.isoformat()
         elif selected_dates:
@@ -1615,9 +1685,15 @@ class AgentToolRegistry:
             trade_date_text = max(event.trade_date for event in self.events).isoformat()
         else:
             trade_date_text = ""
+        if len(selected_dates) > 1:
+            display_date_text = (
+                f"{selected_dates[0].isoformat()} 至 {selected_dates[-1].isoformat()}"
+            )
+        else:
+            display_date_text = trade_date_text
         board_text = f"{board_height}板" if board_height is not None else "涨停"
         market_text = MARKET_SEGMENT_LABELS.get(effective_market or "", "")
-        names = "、".join(f"{event.name}({event.symbol})" for event in target_events[:5])
+        names = "、".join(f"{event.name}({event.symbol})" for event in limited_events[:5])
         trace_output = {
             "trade_date": trade_date_text,
             "start_trade_date": selected_dates[0].isoformat() if selected_dates else None,
@@ -1632,8 +1708,10 @@ class AgentToolRegistry:
             "sort_order": effective_sort_order,
             "matched_count": matched_count,
             "unique_stock_count": unique_stock_count,
-            "returned_count": len(target_events),
+            "returned_count": len(limited_events),
+            "truncated": truncated,
             "event_summary": event_summary,
+            "daily_summaries": daily_summaries,
             "sector_summary": sector_summary,
             "unclassified_event_count": unclassified_event_count,
             "events": [
@@ -1650,7 +1728,7 @@ class AgentToolRegistry:
                     "break_count": event.break_count,
                     "closed_limit": event.closed_limit,
                 }
-                for event in target_events
+                for event in limited_events
             ],
         }
         return ToolResult(
@@ -1669,11 +1747,16 @@ class AgentToolRegistry:
                 "sort_order": effective_sort_order,
                 "limit": limit,
             },
-            output=target_events,
+            output=limited_events,
             summary=(
-                f"{trade_date_text} {market_text}{board_text}查询命中 {matched_count} "
+                f"{display_date_text} {market_text}{board_text}查询命中 {matched_count} "
                 f"{'条事件' if group_by else '只'}"
                 f"{f'：{names}' if names else '。'}"
+                + (
+                    f" 本次返回 {len(limited_events)} 条，其余未列出；"
+                    "不得用返回行数推断全量。"
+                    if truncated else ""
+                )
             ),
             trace_output=trace_output,
         )
@@ -2333,12 +2416,14 @@ def _summarize_event_scope(events: list[LimitUpEvent], trade_date: date) -> dict
     closed = [event for event in events if event.closed_limit]
     opened = [event for event in events if event.break_count > 0]
     unsealed = [event for event in events if not event.closed_limit]
+    resealed = [event for event in opened if event.closed_limit]
     industry_counts = Counter(event.industry for event in closed)
     return {
         "trade_date": trade_date.isoformat(),
         "touched_count": touched,
         "closed_count": len(closed),
         "opened_count": len(opened),
+        "resealed_count": len(resealed),
         "unsealed_count": len(unsealed),
         "opened_rate": len(opened) / touched if touched else None,
         "unsealed_rate": len(unsealed) / touched if touched else None,

@@ -55,9 +55,29 @@ def _drawdown(rows, *, peak_field, trough_field):
     }
 
 
+def _amount_missing(row) -> bool:
+    """Treat a non-positive or absent amount as unavailable, never as zero."""
+
+    amount = row.get("amount")
+    return amount is None or (
+        type(amount) in (int, float) and (not isfinite(amount) or amount <= 0)
+    )
+
+
 def kline_agent_view(payload):
     """Only expose a return with the actual visible observations proving its scope."""
-    bars = payload.get("bars", [])
+    source_bars = payload.get("bars", [])
+    bars = []
+    amount_notes = []
+    for row in source_bars:
+        if not isinstance(row, dict) or not _amount_missing(row):
+            bars.append(row)
+            continue
+        bars.append({**row, "amount": None})
+        trade_date = str(row.get("trade_date") or "")
+        amount_notes.append(
+            f"{trade_date} amount: 来源未提供成交额；null 表示缺失，不能用 0.0 替代"
+        )
     windows = []
     for intervals in (5, 10, 20):
         if len(bars) >= intervals + 1:
@@ -68,10 +88,14 @@ def kline_agent_view(payload):
     close_drawdown = _drawdown(bars, peak_field="close", trough_field="close") if window else None
     high_low_drawdown = _drawdown(bars, peak_field="high", trough_field="low") if window else None
     missing = list(payload.get("data_missing") or [])
+    for note in amount_notes:
+        if note not in missing:
+            missing.append(note)
     for key, value in (("close_max_drawdown", close_drawdown), ("high_low_max_drawdown", high_low_drawdown)):
         if value is None and key not in missing:
             missing.append(key)
     return {**{key: value for key, value in payload.items() if key not in PERIOD_FIELDS},
+            "bars": bars,
             "display_window_return": window, "return_windows": windows,
             "close_max_drawdown": close_drawdown, "high_low_max_drawdown": high_low_drawdown,
             # This view validates the supplied observations, not the exchange's

@@ -208,7 +208,7 @@ class StockKLineServiceTest(unittest.TestCase):
                     low=9.8 + index * 0.1,
                     close=10.2 + index * 0.1,
                     volume=1_000 + index,
-                    amount=0,
+                    amount=1_000 + index,
                     change_pct=None,
                     source="test-cache",
                     created_at=now,

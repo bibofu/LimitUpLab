@@ -308,6 +308,13 @@ class LimitUpEventsPayload(OutputModel):
     matched_count: int = Field(description="过滤后命中事件数")
     unique_stock_count: int = Field(description="去重股票数")
     returned_count: int = Field(description="实际返回事件数")
+    truncated: bool = Field(
+        description="返回事件数是否少于命中数；true 时不得用返回行数推断全量"
+    )
+    daily_summaries: list[MarketDaySummary] = Field(
+        default_factory=list,
+        description="多日查询时逐交易日的全市场聚合；先于板数/状态/关键词过滤，单日查询为空",
+    )
     sector_summary: list[dict[str, Any]] = Field(
         description="按行业或题材聚合的命中数量"
     )
@@ -348,7 +355,8 @@ class MarketDaySummary(OutputModel):
     touched_count: int = Field(description="当日触及涨停的股票数")
     closed_count: int = Field(description="收盘封住涨停的股票数")
     opened_count: int = Field(description="盘中曾开板数，包含最终回封")
-    unsealed_count: int = Field(description="收盘未回封数")
+    resealed_count: int = Field(description="盘中开板后收盘回封的股票数；opened_count 包含本数与 unsealed_count")
+    unsealed_count: int = Field(description="收盘未回封数；是 opened_count 的子集")
     opened_rate: float | None = Field(
         default=None, description="opened_count / touched_count", json_schema_extra={"unit": "0至1比例"}
     )

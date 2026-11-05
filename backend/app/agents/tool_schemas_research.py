@@ -45,17 +45,19 @@ RESEARCH_TOOL_SCHEMAS = [
         collection="items",
         notes=(
             "Event identities/counts; amount may be unavailable. For amount-sorted local "
-            "limit-up/unsealed/intraday-broken events use limit_up_events. unsealed and "
-            "intraday_broken are different sets: unsealed excludes resealed stocks, "
-            "intraday_broken includes them. result_mode=summary with event_type=limit_up "
+            "limit-up/unsealed/intraday-broken events use limit_up_events. unsealed is a "
+            "subset of intraday_broken: intraday_broken = resealed + unsealed. Never add "
+            "the two counts together. result_mode=summary with event_type=limit_up "
             "returns the canonical market-day aggregate and no rows."
         ),
         description=(
             "查询完整交易日的市场价格限制事件，统一支持涨停、跌停、炸板未回封和盘中开板名单。"
             "event_type=limit_up 为收盘封住；limit_down 为跌停；"
             "unsealed 为触及涨停但收盘未封住（炸板未回封，不含回封股）；"
-            "intraday_broken 为盘中至少开板一次（含重新封住的股票）。"
-            "两者不是同一批股票，用户只说“炸板”且未区分口径时必须先说明差异或在回答中写明。"
+            "intraday_broken 为盘中至少开板一次，包含回封和未回封。"
+            "unsealed 是 intraday_broken 的子集：intraday_broken = 回封 + 未回封；"
+            "不能把两个数量相加，也不能说两者是互斥批次。用户只说“炸板”且未区分口径时"
+            "必须先说明差异或在回答中写明。"
             "result_mode=summary 且 event_type=limit_up 时，返回当日市场聚合："
             "触及/收盘封住/盘中开板/未回封及开板率、未回封率、首板数、连板数、最高板和"
             "收盘涨停行业计数；不返回名单。limit_down、unsealed 和 intraday_broken 的 summary 只返回数量。"
@@ -110,8 +112,11 @@ RESEARCH_TOOL_SCHEMAS = [
         notes=(
             "Includes amount (CNY), turnover_rate (%), closed_limit. unsealed means not sealed at close; "
             "intraday_broken means opened at least once and also includes resealed stocks. "
+            "unsealed is a subset of intraday_broken; intraday_broken = resealed + unsealed, so never add them. "
             "Single-day event_summary is the full-day market scope before board/status/keyword filters; "
-            "filtered_count is the returned row count."
+            "filtered_count is the returned row count. Multi-day queries return daily_summaries, one "
+            "market-day aggregate per selected date. truncated=true means returned rows are fewer than "
+            "matched_count; never infer totals from the returned rows."
         ),
         description=(
             "查询单日或最近多个交易日的涨停事件，可按市场板块、板数、首板/连板、炸板次数、"

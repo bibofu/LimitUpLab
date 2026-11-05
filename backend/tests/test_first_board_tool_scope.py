@@ -66,6 +66,11 @@ def test_saved_top10_is_distinct_from_59_eligible_and_33_hard_exclusions(scoped_
     assert shown["recorded_eligible_candidate_count"] == 59
     assert "不是硬筛排除" in shown["field_definitions"]["metadata"]["not_selected_count"]
     assert "已固化" in result.summary and "入池10只" not in result.summary
+    assert "评分输入92只" in result.summary
+    assert "硬筛排除33只" in result.summary
+    assert "合格池59只" in result.summary
+    assert "仅保留10只候选" in result.summary
+    assert "49只未保存" in result.summary
 
 
 def test_legacy_source_completeness_stays_unknown_and_ten_rows_do_not_imply_top10(scoped_registry):
@@ -83,13 +88,24 @@ def test_legacy_source_completeness_stays_unknown_and_ten_rows_do_not_imply_top1
 
 def test_symbol_selection_does_not_turn_nonreturned_saved_candidates_into_hard_exclusions(scoped_registry):
     registry, _, _ = scoped_registry
-    _, payload, shown = visible(registry, ["600000"])
+    result, payload, shown = visible(registry, ["600000"])
     assert shown["row_count"] == payload["returned_candidate_count"] == 1
     assert payload["snapshot_candidate_count"] == 10
     assert payload["not_selected_count"] == 49
     assert payload["filtered_out_count"] == 33
     assert payload["requested_symbols"] == ["600000"]
     assert payload["candidate_pool_complete"] is False
+    assert "共10只候选" in result.summary and "命中1只" in result.summary
+
+
+def test_symbol_miss_names_the_snapshot_scope_instead_of_saying_empty_pool(scoped_registry):
+    registry, _, _ = scoped_registry
+    result, payload, shown = visible(registry, ["900000"])
+    assert shown["row_count"] == payload["returned_candidate_count"] == 0
+    assert "共10只候选" in result.summary
+    assert "未命中" in result.summary
+    assert "不代表该标的不合格" in result.summary
+    assert "暂无入池候选" not in result.summary
 
 
 @pytest.mark.parametrize("symbols", [None, ["600000"]])

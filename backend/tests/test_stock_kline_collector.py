@@ -13,6 +13,7 @@ from app.collectors.stock_kline_collector import (
     _load_akshare_frame,
     _normalize_stock_symbol,
     _parse_sina_intraday_payload,
+    _parse_tencent_daily_rows,
     _parse_tencent_spot_line,
     _sina_intraday_datalen,
     build_stock_close_snapshot,
@@ -25,30 +26,13 @@ from app.collectors.process_timeout import run_in_killable_process
 
 
 class StockKLineCollectorTest(unittest.TestCase):
-    # Regression scenario: daily collector includes end date and excludes later rows.
-    @patch("app.collectors.stock_kline_collector._load_akshare_frame")
+    # Regression scenario: daily collector includes end date, excludes later rows and keeps amount.
+    @patch("app.collectors.stock_kline_collector._load_tencent_daily_rows")
     def test_daily_collector_includes_end_date_and_excludes_later_rows(self, history) -> None:
-        class Frame:
-            # Prepare the to dict fixture or observation used by the surrounding regression
-            # scenario.
-            def to_dict(self, _orient: str):
-                return [
-                    {
-                        "date": item_date,
-                        "open": 10,
-                        "close": 10.5,
-                        "high": 11,
-                        "low": 9.5,
-                        "amount": 1_000,
-                    }
-                    for item_date in (
-                        date(2026, 8, 17),
-                        date(2026, 8, 18),
-                        date(2026, 8, 19),
-                    )
-                ]
-
-        history.return_value = Frame()
+        history.return_value = [
+            [item_date, "10", "10.5", "11", "9.5", "1000", {}, "1.0", "123.45", "0", "0"]
+            for item_date in ("2026-08-17", "2026-08-18", "2026-08-19")
+        ]
 
         bars = collect_stock_kline("002365", days=5, end_date=date(2026, 8, 18))
 
@@ -56,8 +40,42 @@ class StockKLineCollectorTest(unittest.TestCase):
             [item.trade_date for item in bars],
             [date(2026, 8, 17), date(2026, 8, 18)],
         )
-        self.assertEqual(history.call_args.kwargs["end_date"], "20260819")
-        self.assertEqual(history.call_args.args, ("stock_zh_a_hist_tx",))
+        self.assertEqual(bars[0].amount, 1_234_500.0)
+        self.assertEqual(history.call_args.args[0], "sz002365")
+        self.assertEqual(history.call_args.kwargs["adjust"], "")
+
+    @patch("app.collectors.stock_kline_collector._load_akshare_frame")
+    @patch(
+        "app.collectors.stock_kline_collector._load_tencent_daily_rows",
+        side_effect=ValueError("unexpected raw payload"),
+    )
+    def test_legacy_adapter_fallback_keeps_amount_as_missing_sentinel(self, _raw, history) -> None:
+        class Frame:
+            @staticmethod
+            def to_dict(_orient: str):
+                return [{
+                    "date": date(2026, 8, 18), "open": 10, "close": 10.5,
+                    "high": 11, "low": 9.5, "amount": 1_000,
+                }]
+
+        history.return_value = Frame()
+
+        bars = collect_stock_kline("002365", days=5, end_date=date(2026, 8, 18))
+
+        self.assertEqual(len(bars), 1)
+        self.assertEqual(bars[0].amount, 0.0)
+        history.assert_called_once()
+
+    def test_raw_tencent_rows_parse_amount_yuan_and_sort_by_date(self) -> None:
+        bars = _parse_tencent_daily_rows([
+            ["2026-08-18", "10", "10.5", "11", "9.5", "1000", {}, "1.0", "123.45", "0", "0"],
+            ["2026-08-17", "9", "9.5", "10", "8.5", "800", {}, "0.8", "76.00", "0", "0"],
+        ])
+
+        self.assertEqual([item.trade_date for item in bars], [date(2026, 8, 17), date(2026, 8, 18)])
+        self.assertEqual(bars[0].amount, 760_000.0)
+        self.assertEqual(bars[1].amount, 1_234_500.0)
+        self.assertEqual(bars[1].volume, 1_000)
 
     def test_akshare_loader_uses_isolated_worker_with_configured_timeout(self) -> None:
         with patch.dict(os.environ, {"LIMITUPLAB_AKSHARE_KLINE_TIMEOUT_SECONDS": "12.5"}), patch(
@@ -85,6 +103,9 @@ class StockKLineCollectorTest(unittest.TestCase):
 
     def test_akshare_timeouts_propagate_to_callers(self) -> None:
         with patch(
+            "app.collectors.stock_kline_collector._load_tencent_daily_rows",
+            side_effect=TimeoutError("Provider call timed out after 30 seconds"),
+        ), patch(
             "app.collectors.stock_kline_collector._load_akshare_frame",
             side_effect=TimeoutError("Provider call timed out after 30 seconds"),
         ), patch(
@@ -100,6 +121,9 @@ class StockKLineCollectorTest(unittest.TestCase):
         with patch(
             "app.collectors.stock_kline_collector.without_proxy",
             side_effect=AssertionError("parent must not acquire proxy environment lock"),
+        ), patch(
+            "app.collectors.stock_kline_collector._load_tencent_daily_rows",
+            side_effect=ValueError("unexpected raw payload"),
         ), patch(
             "app.collectors.stock_kline_collector._load_akshare_frame",
             return_value=pd.DataFrame(),

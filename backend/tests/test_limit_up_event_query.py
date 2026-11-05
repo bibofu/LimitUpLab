@@ -44,8 +44,14 @@ def test_group_counts_use_full_window_before_limiting_rows_and_groups():
     assert facts["matched_count"] == 4
     assert facts["unique_stock_count"] == 3
     assert facts["returned_count"] == 1
+    assert facts["truncated"] is True
     assert facts["start_trade_date"] == BASE.isoformat()
     assert facts["selected_trade_day_count"] == 2
+    assert [(item["trade_date"], item["first_board_count"], item["filtered_count"])
+            for item in facts["daily_summaries"]] == [
+        (BASE.isoformat(), 1, 1),
+        (NEXT.isoformat(), 3, 3),
+    ]
     assert facts["unclassified_event_count"] == 1
     assert facts["sector_summary"] == [{
         "sector_name": "算力", "unique_stock_count": 2,
@@ -150,6 +156,7 @@ def test_gateway_accepts_symbol_sort_on_first_call_before_limiting_rows(order, e
     assert status == "ok"
     assert [row["symbol"] for row in payload["events"]] == expected
     assert payload["matched_count"] == 3 and payload["returned_count"] == 2
+    assert payload["truncated"] is True
     assert payload["sort_by"] == "symbol"
     assert payload["sort_order"] == (order or "asc")
 
@@ -172,6 +179,17 @@ def test_symbol_support_preserves_existing_sort_defaults_and_normalized_names(so
     assert result.input["sort_order"] == order
 
 
+def test_truncated_is_false_only_when_all_matched_rows_are_returned():
+    rows = [event("600001"), event("600002")]
+    complete = registry(rows).limit_up_events(trade_date=NEXT, limit=2)
+    partial = registry(rows).limit_up_events(trade_date=NEXT, limit=1)
+    assert complete.trace_output["returned_count"] == 2
+    assert complete.trace_output["truncated"] is False
+    assert partial.trace_output["returned_count"] == 1
+    assert partial.trace_output["truncated"] is True
+    assert len(complete.output) == 2 and len(partial.output) == 1
+
+
 def test_single_day_event_summary_provides_rate_components_before_limit():
     rows = [
         event("600001", closed_limit=True, break_count=1),
@@ -185,8 +203,11 @@ def test_single_day_event_summary_provides_rate_components_before_limit():
     assert summary["touched_count"] == 3
     assert summary["closed_count"] == 2
     assert summary["opened_count"] == 2
+    assert summary["resealed_count"] == 1
     assert summary["unsealed_count"] == 1
     assert summary["opened_rate"] == pytest.approx(2 / 3)
     assert summary["unsealed_rate"] == pytest.approx(1 / 3)
     assert facts["matched_count"] == 3
     assert facts["returned_count"] == 1
+    assert facts["truncated"] is True
+    assert facts["daily_summaries"] == []

@@ -61,6 +61,25 @@ def test_missing_first_baseline_is_explicit_without_zero_or_window_substitution(
     assert len(result.data_missing) == 5 and rows[0].trade_date.isoformat() in result.data_missing[0]
 
 
+def test_cache_with_missing_amount_is_refreshed_once_then_served(monkeypatch):
+    rows = bars(2)
+    missing = [row.model_copy(update={"amount": 0}) for row in rows]
+    end_date = rows[-1].trade_date
+    monkeypatch.setattr(stock_kline, "_recent_refresh_covers", lambda *args: False)
+    assert not stock_kline._cache_is_usable(missing, 2, end_date, "600123")
+    assert stock_kline._cache_is_usable(rows, 2, end_date, "600123")
+    monkeypatch.setattr(stock_kline, "_recent_refresh_covers", lambda *args: True)
+    assert stock_kline._cache_is_usable(missing, 2, end_date, "600123")
+
+
+def test_missing_amount_is_explicit_and_not_reported_as_zero(monkeypatch):
+    rows = [bar.model_copy(update={"amount": 0}) for bar in bars(2)]
+    result, _ = facts(monkeypatch, rows, days=2)
+    amount_notes = [item for item in result.data_missing if " amount:" in item]
+    assert len(amount_notes) == 2
+    assert all("不能用 0.0 替代" in item for item in amount_notes)
+
+
 def test_source_percentage_survives_both_cache_conversions_and_takes_priority(monkeypatch):
     source_bar = bars(1, source="source-with-corporate-action-reference")[0].model_copy(
         update={"change_pct": 0.75})

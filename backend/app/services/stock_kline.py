@@ -181,17 +181,13 @@ def load_stock_kline_bars(
         raise ValueError("days must be between 1 and 125")
     active_repository = repository or FirstBoardRepository()
     cached = _cached_bars(active_repository, symbol, end_date)
-    if _cache_can_serve(cached, days, end_date) or (
-        cached and _recent_refresh_covers(symbol, end_date, days)
-    ):
+    if _cache_is_usable(cached, days, end_date, symbol):
         return [_to_kline_bar(item) for item in cached[-days:]]
 
     refresh_lock = _refresh_lock_for(symbol, end_date)
     with refresh_lock:
         cached = _cached_bars(active_repository, symbol, end_date)
-        if _cache_can_serve(cached, days, end_date) or (
-            cached and _recent_refresh_covers(symbol, end_date, days)
-        ):
+        if _cache_is_usable(cached, days, end_date, symbol):
             return [_to_kline_bar(item) for item in cached[-days:]]
 
         collected: list[StockKLineBar] = []
@@ -380,9 +376,43 @@ def build_stock_kline_facts(
             }
         ),
         bars=display_bars,
-        data_missing=[f"{bar.trade_date.isoformat()} change_pct: 来源未提供当日涨跌幅；未用未复权收盘价变动率替代"
-                      for bar in display_bars if bar.change_pct is None],
+        data_missing=[
+            *(
+                f"{bar.trade_date.isoformat()} change_pct: 来源未提供当日涨跌幅；未用未复权收盘价变动率替代"
+                for bar in display_bars if bar.change_pct is None
+            ),
+            *(
+                f"{bar.trade_date.isoformat()} amount: 来源未提供成交额；null 表示缺失，不能用 0.0 替代"
+                for bar in display_bars if _amount_is_missing(bar)
+            ),
+        ],
     )
+
+
+def _amount_is_missing(bar: StockKLineBar | StockDailyBar) -> bool:
+    """Treat a non-positive amount as unavailable, never as a real zero."""
+
+    amount = bar.amount
+    return amount is None or not isfinite(amount) or amount <= 0
+
+
+def _cache_has_missing_amount(bars: list[StockDailyBar], days: int) -> bool:
+    return any(_amount_is_missing(bar) for bar in bars[-days:])
+
+
+def _cache_is_usable(
+    bars: list[StockDailyBar],
+    days: int,
+    end_date: date,
+    symbol: str,
+) -> bool:
+    """Serve cache unless it still lacks a turnover value we can refresh."""
+
+    if not bars:
+        return False
+    if _recent_refresh_covers(symbol, end_date, days):
+        return True
+    return _cache_can_serve(bars, days, end_date) and not _cache_has_missing_amount(bars, days)
 
 
 def _daily_change_bars(bars: list[StockKLineBar]) -> list[StockKLineBar]:

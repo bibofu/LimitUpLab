@@ -1,8 +1,10 @@
 ﻿"""AKShare-backed stock K-line collectors for after-close review pages."""
 
 import json
+import logging
 import os
 from datetime import date, datetime, timedelta
+from math import isfinite
 from typing import Any
 
 import akshare as ak
@@ -11,6 +13,10 @@ import requests
 from app.models import StockCloseSnapshot, StockIntradayKLineBar, StockKLineBar
 from app.collectors.network import without_proxy
 from app.collectors.process_timeout import run_in_killable_process
+
+logger = logging.getLogger(__name__)
+_TENCENT_DAILY_URL = "https://proxy.finance.qq.com/ifzqgtimg/appstock/app/newfqkline/get"
+_TENCENT_AMOUNT_UNIT = 10_000.0  # Tencent returns turnover in ten-thousand CNY.
 
 
 def _fetch_akshare_frame(api_name: str, kwargs: dict[str, Any]) -> Any:
@@ -32,11 +38,40 @@ def collect_stock_kline(
     days: int = 5,
     end_date: date | None = None,
 ) -> list[StockKLineBar]:
-    """Collect recent daily K-line bars ending at the latest persisted trade date."""
+    """Collect recent daily K-line bars ending at the latest persisted trade date.
+
+    Tencent's public AKShare adapter drops the turnover field even though the
+    provider response contains it. Read the raw daily rows first so amount is
+    real; if that shape changes, fall back to the adapter and let the service
+    mark the unavailable amount instead of presenting 0.0 as a fact.
+    """
 
     normalized_symbol = _normalize_stock_symbol(symbol)
     target_end_date = end_date or date.today()
     start_date = target_end_date - timedelta(days=max(days * 3, 15))
+
+    try:
+        rows = _load_tencent_daily_rows(
+            normalized_symbol, start_date, target_end_date, adjust="",
+        )
+        bars = _parse_tencent_daily_rows(rows)
+        filtered = [
+            bar for bar in bars
+            if start_date <= bar.trade_date <= target_end_date
+        ]
+        if not filtered:
+            raise ValueError("Tencent daily response contained no bars in range")
+        return filtered[-days:]
+    except TimeoutError:
+        # A provider timeout would only be repeated by the fallback adapter.
+        raise
+    except Exception as error:  # noqa: BLE001 - fall back to the adapter shape
+        logger.warning(
+            "Tencent raw daily rows failed for %s; using AKShare fallback "
+            "without turnover: %s",
+            normalized_symbol,
+            error,
+        )
 
     frame = _load_akshare_frame(
         "stock_zh_a_hist_tx",
@@ -60,11 +95,104 @@ def collect_stock_kline(
             high=round(float(row["high"]), 2),
             low=round(float(row["low"]), 2),
             volume=float(row["amount"]),
-            amount=float(row.get("turnover") or 0),
+            # This adapter projection has no turnover column. Keep 0.0 as the
+            # legacy storage sentinel; the service exposes it as missing.
+            amount=0.0,
             source="akshare.stock_zh_a_hist_tx",
         )
         for row in rows
     ]
+
+
+def _fetch_tencent_daily_rows(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+    adjust: str,
+) -> list[list[Any]]:
+    """Read Tencent's raw daily rows inside the killable worker process."""
+
+    with without_proxy():
+        response = requests.get(
+            _TENCENT_DAILY_URL,
+            params={
+                "_var": f"kline_day{adjust}",
+                "param": f"{symbol},day,{start_date},{end_date},640,{adjust}",
+                "r": "0.8205512681390605",
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+
+    text = response.text
+    marker = "={"
+    start = text.find(marker)
+    if start < 0:
+        raise ValueError("invalid Tencent daily response")
+    payload = json.loads(text[start + 1:])
+    data = payload.get("data", {}).get(symbol)
+    if not isinstance(data, dict):
+        raise ValueError("missing Tencent daily symbol payload")
+    key = "day" if not adjust else ("hfqday" if adjust == "hfq" else "qfqday")
+    rows = data.get(key)
+    if not isinstance(rows, list):
+        raise ValueError("missing Tencent daily rows")
+    return rows
+
+
+def _load_tencent_daily_rows(
+    symbol: str,
+    start_date: date,
+    end_date: date,
+    *,
+    adjust: str = "",
+) -> list[list[Any]]:
+    """Load raw rows with the same configured deadline as other K-line calls."""
+
+    timeout = float(os.environ.get("LIMITUPLAB_AKSHARE_KLINE_TIMEOUT_SECONDS", "60"))
+    return run_in_killable_process(
+        _fetch_tencent_daily_rows,
+        symbol,
+        start_date.isoformat(),
+        end_date.isoformat(),
+        adjust,
+        timeout_seconds=timeout,
+    )
+
+
+def _parse_tencent_daily_rows(rows: list[list[Any]]) -> list[StockKLineBar]:
+    """Normalize Tencent's 11-field rows, keeping amount and turnover precision."""
+
+    by_date: dict[date, StockKLineBar] = {}
+    for row in rows:
+        if not isinstance(row, (list, tuple)) or len(row) < 6:
+            continue
+        try:
+            trade_date = _parse_date(row[0])
+            open_price = float(row[1])
+            close = float(row[2])
+            high = float(row[3])
+            low = float(row[4])
+            volume = float(row[5])
+            raw_amount = row[8] if len(row) > 8 and row[8] not in (None, "") else None
+            amount = float(raw_amount) * _TENCENT_AMOUNT_UNIT if raw_amount is not None else None
+        except (TypeError, ValueError):
+            continue
+        if min(open_price, close, high, low) <= 0 or volume < 0:
+            continue
+        if not all(isfinite(value) for value in (open_price, close, high, low, volume)):
+            continue
+        by_date[trade_date] = StockKLineBar(
+            trade_date=trade_date,
+            open=round(open_price, 2),
+            close=round(close, 2),
+            high=round(high, 2),
+            low=round(low, 2),
+            volume=volume,
+            amount=round(amount, 2) if amount is not None and isfinite(amount) and amount > 0 else 0.0,
+            source="akshare.stock_zh_a_hist_tx",
+        )
+    return [by_date[item] for item in sorted(by_date)]
 
 
 def collect_stock_spot_klines(

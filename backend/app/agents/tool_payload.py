@@ -56,6 +56,11 @@ def payload_of(result):
         ]}
     if result.name == "stock_kline" and isinstance(raw, dict):
         raw = {**kline_agent_view(raw), "metric_definitions": {
+            "amount": (
+                "成交额（元）；null 表示来源未提供，不能用 0.0 替代。"
+                "Tencent 原始成交额以万元返回，换算后可能有不超过 100 元的舍入误差；"
+                "与事件库 amount 的微小差异不是来源冲突。"
+            ),
             "change_pct": "Provider daily percentage only; null when unavailable. Do not replace with unadjusted close-to-close changes, especially on ex-right dates.",
             "close_to_close_pct": "(close / previous_close - 1)*100 using known unadjusted prices; comparison date is previous_trade_date. A price-change statistic, not the provider/ex-right daily change_pct.",
             "display_window_return": "Return over the displayed bars only, with explicit first/last date and close. N observations contain N-1 observed intervals; this does not prove calendar completeness.",

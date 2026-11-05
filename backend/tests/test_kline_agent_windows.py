@@ -43,6 +43,24 @@ def test_six_visible_bars_prove_the_distinct_five_interval_window():
     assert window["return_pct"] == 34.561
 
 
+def test_missing_amount_is_exposed_as_null_and_explained():
+    raw = payload()
+    for bar in raw["bars"]:
+        bar["amount"] = 0
+    view = kline_agent_view(raw)
+    assert all(bar["amount"] is None for bar in view["bars"])
+    assert sum("amount" in note for note in view["data_missing"]) == len(raw["bars"])
+
+
+def test_present_amount_survives_the_agent_view():
+    raw = payload()
+    for index, bar in enumerate(raw["bars"]):
+        bar["amount"] = 1_234_500 + index
+    view = kline_agent_view(raw)
+    assert view["bars"][0]["amount"] == 1_234_500
+    assert not any("amount" in note for note in view["data_missing"])
+
+
 def test_incompatible_price_sources_do_not_create_a_comparable_return():
     raw = payload()
     raw["bars"][0]["source"] = "different-adjustment"

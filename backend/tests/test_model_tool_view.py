@@ -33,7 +33,8 @@ def test_all_68_limit_up_rows_are_visible_once():
 def test_60_bar_tail_and_server_indicators_reach_the_model():
     end = date(2026, 10, 23)
     bars = [{"trade_date": str(end - timedelta(days=59-index)), "close": 100+index,
-             "high": 101+index, "low": 99+index, "source": "tencent.qt.gtimg.cn"}
+             "high": 101+index, "low": 99+index, "amount": 1_000+index,
+             "source": "tencent.qt.gtimg.cn"}
             for index in range(60)]
     payload = payload_of(ToolResult(name="stock_kline", input={}, summary="test", output={
         "bars": bars, "data_as_of": str(end), "ma5": 157.0, "ma10": 154.5,
