@@ -86,6 +86,9 @@ def test_search_catalog_ranks_capability_aliases_and_marks_visible_tools():
     finance = search_tool_catalog(CATALOG, "营收和净利润", limit=3)
     assert finance[0]["name"] == "stock_financials"
 
+    company = search_tool_catalog(CATALOG, "公司", limit=3)
+    assert company[0]["name"] == "stock_profile"
+
 
 def test_search_catalog_returns_empty_for_unmatched_query():
     assert search_tool_catalog(CATALOG, "完全不存在的词") == []
@@ -153,6 +156,29 @@ def test_off_mode_exposes_no_search_tool_and_rejects_manual_search():
     })
     assert value["status"] == "error"
     assert "disabled" in value["error"]
+
+
+def test_search_treats_a_resolvable_stock_name_as_a_capability_hint():
+    tool_registry = registry()
+
+    def resolve(value: str):
+        if "宁德时代" in value:
+            return ("300750", "宁德时代")
+        raise ValueError("not a stock")
+
+    tool_registry.resolve_stock_identity = resolve
+    runner = NodeRunner(
+        request("最新财经新闻有哪些"), tool_registry, ScriptedProvider([]),
+        progressive_mode="hybrid",
+    )
+
+    value = runner.execute({
+        "name": SEARCH_TOOLS_TOOL, "args": {"query": "宁德时代"}, "id": "stock-search",
+    })
+
+    names = [row["name"] for row in value["rows"]]
+    assert "stock_profile" in names
+    assert "stock_financials" in names
 
 
 def test_full_mode_starts_with_meta_tools_only():

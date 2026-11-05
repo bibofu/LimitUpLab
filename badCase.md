@@ -502,3 +502,17 @@
 - 预算修正：初次真实运行发现 `search_tools` 和 `read_tool_result` 会占用 8 次数据查询额度，导致第 9 个业务工具报“工具执行额度耗尽”。现在数据工具、元工具分开计数：`MAX_TOOL_CALLS=8`、`MAX_META_CALLS=8`、`MAX_SEARCH_CALLS=3`；搜索和回执读取不再挤占数据查询额度。
 - 验证：`hybrid` 会话 `chat_594d2fc7d8294d0e814c0e2c5afcebd9` 首次确认两条问题分别调用 `search_tools` 后发现 `stock_profile`、`stock_financials`，但搜索占用数据额度导致后续工具失败。预算修正后复验会话 `chat_7347f73f69e5445593e5b955893d8ddf`：Q1 调用 `search_tools` 后取得宁德时代公司资料；Q2 调用 `search_tools` 后取得营收、归母净利润和单季数据；两组工具调用均未再出现额度耗尽。新增 `test_progressive_tools.py` 覆盖搜索排序、`already_visible`、hybrid/off/full 初始集合、稳定定义顺序、活动上限、搜索不占数据额度、参数校验；新增 durable 测试确认 `search_tools` observation 不会被回执引用替换、恢复后仍能发现工具。后端全量 2217 passed、3 skipped、22 subtests，前端 266 passed、构建通过。
 - 边界：搜索是关键词评分，不是向量检索或独立小模型；初始 profile 仍是关键词规则，股票名称未命中时可能先落到 `general`；默认 off，需显式设置环境变量启用。设计说明见 `docs/Progressive_Tool_Disclosure.md`。
+
+## 2026-11-05：渐进式工具披露的多场景基准与公司名搜索修正
+
+- 方法：本地 `deepseek-v4-flash`，12 个场景 × `deterministic / hybrid / full / all-tools` 四种模式，最多 4 个选择轮次；业务工具使用固定 synthetic observation，隔离工具选择与上下文成本；真实工具执行另行端到端验证。
+- 首轮发现：`review_company`（“复盘今天，顺便介绍一下宁德时代”）在 `hybrid` 下搜索“公司/介绍”时没有把 `stock_profile` 排进结果，4 轮内未命中；`review_financials` 可以命中。原因是搜索只按工具描述关键词评分，未利用可解析的公司名/股票代码，也缺少“公司/介绍”别名。
+- 修正：`SEARCH_ALIASES` 增加“公司/公司介绍/介绍/财报”；`_search_tools` 在 query 可被 `resolve_stock_identity` 解析时，优先返回 `stock_profile`、`stock_kline`、`stock_financials`、`stock_news`、`stock_activity`。新增别名和公司名提示测试。
+- 最终矩阵（12 场景平均）：
+  - `deterministic`：命中率 83.3%，平均 2.50 次模型调用，平均 prompt 11,728 token，相对全量省 61.0%。
+  - `hybrid`：命中率 100%，平均 3.00 次调用，平均 prompt 15,055 token，省 50.0%；工具 schema 估算 token 省 57.0%。
+  - `full`：命中率 83.3%，平均 3.75 次调用，平均 prompt 15,840 token，省 47.3%；本轮出现一次 `OpenAITimeoutError`。
+  - `all-tools`：命中率 100%，平均 2.50 次调用，平均 prompt 30,081 token，基线。
+- 工具 schema 单独探针（同一短消息）：无工具 13 token；`stock` 6 工具 3,283 token（+3,270）；`review` 4 工具 2,503 token（+2,490）；全量 25 工具 10,753 token（+10,740）。
+- 结论：`hybrid` 在命中率上与全量工具持平，prompt token 约少一半，代价是平均多 0.5 次模型调用；`deterministic` 更省但漏长尾组合；`full` 起步过小，调用次数和超时风险都更高。
+- 边界：基准是 selection-only，不执行真实业务工具；每组合单次运行，LLM 有随机性。结果用于比较模式，不替代浏览器端业务验收。

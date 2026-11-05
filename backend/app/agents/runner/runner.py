@@ -423,6 +423,18 @@ class AgentRunner:
             span.finish(status=value.get("status", "error"), output=value)
             return value
 
+    def _query_resolves_to_stock(self, query: str) -> bool:
+        """Treat a resolvable company name or code as a stock capability hint."""
+
+        resolver = getattr(self.gateway.registry, "resolve_stock_identity", None)
+        if not callable(resolver):
+            return False
+        try:
+            resolver(query)
+            return True
+        except Exception:  # noqa: BLE001 - a non-stock query is the normal case
+            return False
+
     def _search_tools(self, request: SearchToolsRequest) -> dict[str, Any]:
         """Search the enabled catalog and admit only tools that fit the active budget."""
 
@@ -440,6 +452,29 @@ class AgentRunner:
         rows = search_tool_catalog(
             catalog, request.query, limit=request.limit, active_names=active,
         )
+        if self._query_resolves_to_stock(request.query):
+            # A company name or stock code is itself a capability signal even
+            # when its words do not appear in the tool descriptions.
+            preferred = (
+                "stock_profile", "stock_kline", "stock_financials",
+                "stock_news", "stock_activity",
+            )
+            present = {row["name"] for row in rows}
+            rows = [
+                *[
+                    {
+                        "name": name,
+                        "description": " ".join(
+                            str(catalog[name].get("description") or "").split()
+                        )[:180],
+                        "time_mode": catalog[name].get("time_mode"),
+                        "already_visible": name in active,
+                    }
+                    for name in preferred
+                    if name in catalog and name not in present
+                ],
+                *rows,
+            ]
         visible = [row for row in rows if row["already_visible"]]
         new = [row for row in rows if not row["already_visible"]]
         admitted = new[:remaining]
